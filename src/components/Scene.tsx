@@ -645,12 +645,11 @@ const CameraController = () => {
   );
 };
 
-// Placement helper component with collision detection
+// Placement helper component with improved stacking
 const PlacementHelper = () => {
   const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement, objects } = useSceneStore();
   const { camera, raycaster, pointer, scene } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
-  const [collisionDetected, setCollisionDetected] = useState(false);
 
   // Helper function to get bounding box of an object
   const getObjectBoundingBox = (object: THREE.Object3D) => {
@@ -697,35 +696,18 @@ const PlacementHelper = () => {
     return box;
   };
 
-  // Check for collisions with existing objects
-  const checkCollisions = (position: THREE.Vector3) => {
-    if (!pendingObject) return false;
-
-    const pendingBox = getPendingObjectBoundingBox(position);
-    
-    // Check collision with all visible objects
-    for (const { object, visible } of objects) {
-      if (!visible) continue;
-      
-      const objectBox = getObjectBoundingBox(object);
-      if (pendingBox.intersectsBox(objectBox)) {
-        return true;
-      }
-    }
-    
-    return false;
-  };
-
-  // Find the highest surface to place object on
+  // Find the highest surface to place object on (improved stacking logic)
   const findPlacementPosition = (intersectionPoint: THREE.Vector3) => {
     if (!pendingObject) return intersectionPoint;
 
-    const pendingBox = getPendingObjectBoundingBox(intersectionPoint);
-    const pendingHeight = pendingBox.max.y - pendingBox.min.y;
-    const pendingBottomOffset = intersectionPoint.y - pendingBox.min.y;
+    // Create a temporary object to get its dimensions
+    const tempBox = getPendingObjectBoundingBox(intersectionPoint);
+    const objectHeight = tempBox.max.y - tempBox.min.y;
+    const objectWidth = tempBox.max.x - tempBox.min.x;
+    const objectDepth = tempBox.max.z - tempBox.min.z;
 
     let highestY = 0; // Ground level
-    let foundSurface = false;
+    const tolerance = 0.5; // How close objects need to be to stack
 
     // Check all visible objects for surfaces to place on
     for (const { object, visible } of objects) {
@@ -733,23 +715,23 @@ const PlacementHelper = () => {
       
       const objectBox = getObjectBoundingBox(object);
       
-      // Check if the object is within X-Z range of where we want to place
-      if (intersectionPoint.x >= objectBox.min.x - 0.1 && 
-          intersectionPoint.x <= objectBox.max.x + 0.1 &&
-          intersectionPoint.z >= objectBox.min.z - 0.1 && 
-          intersectionPoint.z <= objectBox.max.z + 0.1) {
-        
+      // Check if the object is within stacking range (X-Z plane)
+      const xOverlap = Math.abs(intersectionPoint.x - (objectBox.min.x + objectBox.max.x) / 2) < 
+                      (objectWidth / 2 + (objectBox.max.x - objectBox.min.x) / 2 + tolerance);
+      const zOverlap = Math.abs(intersectionPoint.z - (objectBox.min.z + objectBox.max.z) / 2) < 
+                      (objectDepth / 2 + (objectBox.max.z - objectBox.min.z) / 2 + tolerance);
+      
+      if (xOverlap && zOverlap) {
         // This object could be a surface to place on
         const surfaceY = objectBox.max.y;
         if (surfaceY > highestY) {
           highestY = surfaceY;
-          foundSurface = true;
         }
       }
     }
 
-    // Calculate final position
-    const finalY = highestY + pendingBottomOffset;
+    // Place the object so its bottom sits on the highest surface
+    const finalY = highestY + (objectHeight / 2);
     return new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
   };
 
@@ -773,7 +755,7 @@ const PlacementHelper = () => {
       let targetPosition: THREE.Vector3;
 
       if (intersects.length > 0) {
-        // Hit an existing object - place on top of it
+        // Hit an existing object - use the intersection point
         targetPosition = intersects[0].point;
       } else if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
         // Hit the ground plane
@@ -785,18 +767,13 @@ const PlacementHelper = () => {
       // Find the best placement position (accounting for stacking)
       const placementPosition = findPlacementPosition(targetPosition);
       
-      // Check for collisions at this position
-      const hasCollision = checkCollisions(placementPosition);
-      
       setHoverPosition(placementPosition);
-      setCollisionDetected(hasCollision);
     };
 
     const handleClick = (event) => {
-      if (event.button === 0 && hoverPosition && !collisionDetected) { // Left click and no collision
+      if (event.button === 0 && hoverPosition) { // Left click
         placeObjectAt(hoverPosition);
         setHoverPosition(null);
-        setCollisionDetected(false);
       }
     };
 
@@ -805,7 +782,6 @@ const PlacementHelper = () => {
         event.preventDefault();
         cancelObjectPlacement();
         setHoverPosition(null);
-        setCollisionDetected(false);
       }
     };
 
@@ -813,7 +789,6 @@ const PlacementHelper = () => {
       if (event.key === 'Escape') {
         cancelObjectPlacement();
         setHoverPosition(null);
-        setCollisionDetected(false);
       }
     };
 
@@ -828,7 +803,7 @@ const PlacementHelper = () => {
       window.removeEventListener('contextmenu', handleRightClick);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [placementMode, hoverPosition, collisionDetected, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
+  }, [placementMode, hoverPosition, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
 
   if (!placementMode || !hoverPosition || !pendingObject) return null;
 
@@ -840,9 +815,9 @@ const PlacementHelper = () => {
     previewObject = geometryOrGroup.clone();
   } else {
     const material = new THREE.MeshStandardMaterial({ 
-      color: collisionDetected ? '#ff4444' : (pendingObject.color || '#44aa88'),
+      color: pendingObject.color || '#44aa88',
       transparent: true,
-      opacity: collisionDetected ? 0.3 : 0.5
+      opacity: 0.6
     });
     previewObject = new THREE.Mesh(geometryOrGroup, material);
   }
