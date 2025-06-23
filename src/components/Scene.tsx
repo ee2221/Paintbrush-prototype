@@ -645,12 +645,13 @@ const CameraController = () => {
   );
 };
 
-// Enhanced placement helper component with sideways stacking
+// Enhanced placement helper component with surface-oriented placement
 const PlacementHelper = () => {
   const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement, objects } = useSceneStore();
   const { camera, raycaster, pointer, scene } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
   const [surfaceNormal, setSurfaceNormal] = useState<THREE.Vector3 | null>(null);
+  const [objectRotation, setObjectRotation] = useState<THREE.Euler | null>(null);
 
   // Helper function to get bounding box of an object
   const getObjectBoundingBox = (object: THREE.Object3D) => {
@@ -672,7 +673,7 @@ const PlacementHelper = () => {
   };
 
   // Helper function to get approximate bounding box for pending object
-  const getPendingObjectBoundingBox = (position: THREE.Vector3) => {
+  const getPendingObjectBoundingBox = (position: THREE.Vector3, rotation?: THREE.Euler) => {
     if (!pendingObject) return new THREE.Box3();
 
     const geometryOrGroup = pendingObject.geometry();
@@ -686,6 +687,10 @@ const PlacementHelper = () => {
     }
 
     tempObject.position.copy(position);
+    if (rotation) {
+      tempObject.rotation.copy(rotation);
+    }
+    
     const box = getObjectBoundingBox(tempObject);
     
     // Clean up
@@ -697,68 +702,88 @@ const PlacementHelper = () => {
     return box;
   };
 
-  // Enhanced placement logic with sideways stacking
-  const findPlacementPosition = (intersectionPoint: THREE.Vector3, normal?: THREE.Vector3) => {
-    if (!pendingObject) return intersectionPoint;
+  // Calculate object orientation based on surface normal
+  const calculateObjectOrientation = (normal: THREE.Vector3) => {
+    // Default up vector for objects (Y-axis)
+    const objectUp = new THREE.Vector3(0, 1, 0);
+    
+    // Calculate rotation to align object's up vector with surface normal
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromUnitVectors(objectUp, normal);
+    
+    return new THREE.Euler().setFromQuaternion(quaternion);
+  };
 
-    // Create a temporary object to get its dimensions
-    const tempBox = getPendingObjectBoundingBox(intersectionPoint);
-    const objectDimensions = {
-      width: tempBox.max.x - tempBox.min.x,
-      height: tempBox.max.y - tempBox.min.y,
-      depth: tempBox.max.z - tempBox.min.z
+  // Get object dimensions in its current orientation
+  const getOrientedObjectDimensions = (rotation: THREE.Euler) => {
+    if (!pendingObject) return { width: 1, height: 1, depth: 1 };
+
+    // Create a temporary object to measure dimensions
+    const geometryOrGroup = pendingObject.geometry();
+    let tempObject: THREE.Object3D;
+
+    if (geometryOrGroup instanceof THREE.Group) {
+      tempObject = geometryOrGroup.clone();
+    } else {
+      const material = new THREE.MeshStandardMaterial();
+      tempObject = new THREE.Mesh(geometryOrGroup, material);
+    }
+
+    // Apply rotation
+    tempObject.rotation.copy(rotation);
+    tempObject.updateMatrixWorld();
+
+    // Get bounding box in world space
+    const box = new THREE.Box3().setFromObject(tempObject);
+    
+    const dimensions = {
+      width: box.max.x - box.min.x,
+      height: box.max.y - box.min.y,
+      depth: box.max.z - box.min.z
     };
 
-    // If we have a surface normal, use it for placement
+    // Clean up
+    if (tempObject instanceof THREE.Mesh) {
+      tempObject.geometry.dispose();
+      (tempObject.material as THREE.Material).dispose();
+    }
+
+    return dimensions;
+  };
+
+  // Enhanced placement logic with surface-oriented placement
+  const findPlacementPosition = (intersectionPoint: THREE.Vector3, normal?: THREE.Vector3) => {
+    if (!pendingObject) return { position: intersectionPoint, rotation: null };
+
+    let rotation: THREE.Euler | null = null;
+    let offsetDistance = 0;
+
+    // If we have a surface normal, orient the object to the surface
     if (normal) {
-      // Calculate offset based on surface normal and object dimensions
-      let offset = 0;
+      rotation = calculateObjectOrientation(normal);
       
-      // Determine which dimension to use based on the normal direction
-      if (Math.abs(normal.y) > 0.8) {
-        // Mostly vertical surface (top/bottom)
-        offset = objectDimensions.height / 2;
-      } else if (Math.abs(normal.x) > Math.abs(normal.z)) {
-        // Mostly X-axis surface (left/right)
-        offset = objectDimensions.width / 2;
-      } else {
-        // Mostly Z-axis surface (front/back)
-        offset = objectDimensions.depth / 2;
+      // Get object dimensions in the new orientation
+      const dimensions = getOrientedObjectDimensions(rotation);
+      
+      // Use the smallest dimension as the offset (the "base" of the object)
+      offsetDistance = Math.min(dimensions.width, dimensions.height, dimensions.depth) / 2;
+      
+      // For very flat surfaces (like ground), use height
+      if (Math.abs(normal.y) > 0.9) {
+        offsetDistance = dimensions.height / 2;
       }
-
-      // Place object on the surface with proper offset
-      const placementPosition = intersectionPoint.clone().add(normal.clone().multiplyScalar(offset));
-      return placementPosition;
+    } else {
+      // Fallback: use default orientation and height
+      const tempBox = getPendingObjectBoundingBox(intersectionPoint);
+      offsetDistance = (tempBox.max.y - tempBox.min.y) / 2;
     }
 
-    // Fallback to ground placement if no normal
-    let highestY = 0; // Ground level
-    const tolerance = 0.5; // How close objects need to be to stack
+    // Calculate final position with proper offset
+    const finalPosition = normal 
+      ? intersectionPoint.clone().add(normal.clone().multiplyScalar(offsetDistance))
+      : new THREE.Vector3(intersectionPoint.x, intersectionPoint.y + offsetDistance, intersectionPoint.z);
 
-    // Check all visible objects for surfaces to place on
-    for (const { object, visible } of objects) {
-      if (!visible) continue;
-      
-      const objectBox = getObjectBoundingBox(object);
-      
-      // Check if the object is within stacking range (X-Z plane)
-      const xOverlap = Math.abs(intersectionPoint.x - (objectBox.min.x + objectBox.max.x) / 2) < 
-                      (objectDimensions.width / 2 + (objectBox.max.x - objectBox.min.x) / 2 + tolerance);
-      const zOverlap = Math.abs(intersectionPoint.z - (objectBox.min.z + objectBox.max.z) / 2) < 
-                      (objectDimensions.depth / 2 + (objectBox.max.z - objectBox.min.z) / 2 + tolerance);
-      
-      if (xOverlap && zOverlap) {
-        // This object could be a surface to place on
-        const surfaceY = objectBox.max.y;
-        if (surfaceY > highestY) {
-          highestY = surfaceY;
-        }
-      }
-    }
-
-    // Place the object so its bottom sits on the highest surface
-    const finalY = highestY + (objectDimensions.height / 2);
-    return new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
+    return { position: finalPosition, rotation };
   };
 
   useEffect(() => {
@@ -804,17 +829,19 @@ const PlacementHelper = () => {
         }
       }
 
-      // Find the best placement position (accounting for surface orientation)
-      const placementPosition = findPlacementPosition(targetPosition, normal);
+      // Find the best placement position and orientation
+      const { position, rotation } = findPlacementPosition(targetPosition, normal);
       
-      setHoverPosition(placementPosition);
+      setHoverPosition(position);
+      setObjectRotation(rotation);
     };
 
     const handleClick = (event) => {
       if (event.button === 0 && hoverPosition) { // Left click
-        placeObjectAt(hoverPosition);
+        placeObjectAt(hoverPosition, objectRotation);
         setHoverPosition(null);
         setSurfaceNormal(null);
+        setObjectRotation(null);
       }
     };
 
@@ -824,6 +851,7 @@ const PlacementHelper = () => {
         cancelObjectPlacement();
         setHoverPosition(null);
         setSurfaceNormal(null);
+        setObjectRotation(null);
       }
     };
 
@@ -832,6 +860,7 @@ const PlacementHelper = () => {
         cancelObjectPlacement();
         setHoverPosition(null);
         setSurfaceNormal(null);
+        setObjectRotation(null);
       }
     };
 
@@ -846,11 +875,11 @@ const PlacementHelper = () => {
       window.removeEventListener('contextmenu', handleRightClick);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [placementMode, hoverPosition, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
+  }, [placementMode, hoverPosition, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject, objectRotation]);
 
   if (!placementMode || !hoverPosition || !pendingObject) return null;
 
-  // Create preview object
+  // Create preview object with proper orientation
   const geometryOrGroup = pendingObject.geometry();
   let previewObject;
 
@@ -863,6 +892,11 @@ const PlacementHelper = () => {
       opacity: 0.6
     });
     previewObject = new THREE.Mesh(geometryOrGroup, material);
+  }
+
+  // Apply rotation if calculated
+  if (objectRotation) {
+    previewObject.rotation.copy(objectRotation);
   }
 
   return (

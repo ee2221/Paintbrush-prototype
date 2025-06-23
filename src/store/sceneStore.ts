@@ -128,9 +128,9 @@ interface SceneState {
   mirrorObject: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
-  // New placement functions
+  // Enhanced placement functions
   startObjectPlacement: (objectDef: { geometry: () => THREE.BufferGeometry | THREE.Group; name: string; color?: string }) => void;
-  placeObjectAt: (position: THREE.Vector3) => void;
+  placeObjectAt: (position: THREE.Vector3, rotation?: THREE.Euler | null) => void;
   cancelObjectPlacement: () => void;
   // Light management functions
   addLight: (type: 'directional' | 'point' | 'spot', position?: number[]) => void;
@@ -1035,7 +1035,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       cameraZoom: Math.max(state.cameraZoom / 1.2, 0.1)
     })),
 
-  // New placement functions
+  // Enhanced placement functions
   startObjectPlacement: (objectDef) =>
     set({
       placementMode: true,
@@ -1045,7 +1045,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       editMode: null
     }),
 
-  placeObjectAt: (position) =>
+  placeObjectAt: (position, rotation = null) =>
     set((state) => {
       if (!state.pendingObject) return state;
 
@@ -1064,8 +1064,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         object = new THREE.Mesh(geometryOrGroup, material);
       }
 
-      // Set position
+      // Set position and rotation
       object.position.copy(position);
+      if (rotation) {
+        object.rotation.copy(rotation);
+      }
 
       // Add to scene
       const newObjects = [...state.objects, { 
