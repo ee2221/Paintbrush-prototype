@@ -645,11 +645,13 @@ const CameraController = () => {
   );
 };
 
-// Placement helper component with collision detection
+// Advanced placement helper with surface alignment
 const PlacementHelper = () => {
   const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement, objects } = useSceneStore();
   const { camera, raycaster, pointer, scene } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
+  const [hoverRotation, setHoverRotation] = useState<THREE.Euler | null>(null);
+  const [surfaceNormal, setSurfaceNormal] = useState<THREE.Vector3 | null>(null);
   const [collisionDetected, setCollisionDetected] = useState(false);
 
   // Helper function to get bounding box of an object
@@ -672,7 +674,7 @@ const PlacementHelper = () => {
   };
 
   // Helper function to get approximate bounding box for pending object
-  const getPendingObjectBoundingBox = (position: THREE.Vector3) => {
+  const getPendingObjectBoundingBox = (position: THREE.Vector3, rotation?: THREE.Euler) => {
     if (!pendingObject) return new THREE.Box3();
 
     const geometryOrGroup = pendingObject.geometry();
@@ -686,6 +688,10 @@ const PlacementHelper = () => {
     }
 
     tempObject.position.copy(position);
+    if (rotation) {
+      tempObject.rotation.copy(rotation);
+    }
+    
     const box = getObjectBoundingBox(tempObject);
     
     // Clean up
@@ -697,11 +703,21 @@ const PlacementHelper = () => {
     return box;
   };
 
+  // Calculate rotation to align object with surface normal
+  const calculateSurfaceAlignment = (normal: THREE.Vector3) => {
+    // Create a rotation that aligns the object's up vector (0, 1, 0) with the surface normal
+    const up = new THREE.Vector3(0, 1, 0);
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromUnitVectors(up, normal);
+    
+    return new THREE.Euler().setFromQuaternion(quaternion);
+  };
+
   // Check for collisions with existing objects
-  const checkCollisions = (position: THREE.Vector3) => {
+  const checkCollisions = (position: THREE.Vector3, rotation?: THREE.Euler) => {
     if (!pendingObject) return false;
 
-    const pendingBox = getPendingObjectBoundingBox(position);
+    const pendingBox = getPendingObjectBoundingBox(position, rotation);
     
     // Check collision with all visible objects
     for (const { object, visible } of objects) {
@@ -716,15 +732,26 @@ const PlacementHelper = () => {
     return false;
   };
 
-  // Find the highest surface to place object on
-  const findPlacementPosition = (intersectionPoint: THREE.Vector3) => {
-    if (!pendingObject) return intersectionPoint;
+  // Find the best placement position and orientation
+  const findPlacementPositionAndOrientation = (intersectionPoint: THREE.Vector3, intersectionNormal?: THREE.Vector3) => {
+    if (!pendingObject) return { position: intersectionPoint, rotation: null, normal: null };
 
-    const pendingBox = getPendingObjectBoundingBox(intersectionPoint);
+    // Calculate rotation based on surface normal
+    let rotation = null;
+    let normal = null;
+    
+    if (intersectionNormal) {
+      normal = intersectionNormal.clone();
+      rotation = calculateSurfaceAlignment(normal);
+    }
+
+    // Get the bounding box with the calculated rotation
+    const pendingBox = getPendingObjectBoundingBox(intersectionPoint, rotation);
     const pendingHeight = pendingBox.max.y - pendingBox.min.y;
     const pendingBottomOffset = intersectionPoint.y - pendingBox.min.y;
 
     let highestY = 0; // Ground level
+    let bestNormal = new THREE.Vector3(0, 1, 0); // Default up normal
     let foundSurface = false;
 
     // Check all visible objects for surfaces to place on
@@ -734,23 +761,35 @@ const PlacementHelper = () => {
       const objectBox = getObjectBoundingBox(object);
       
       // Check if the object is within X-Z range of where we want to place
-      if (intersectionPoint.x >= objectBox.min.x - 0.1 && 
-          intersectionPoint.x <= objectBox.max.x + 0.1 &&
-          intersectionPoint.z >= objectBox.min.z - 0.1 && 
-          intersectionPoint.z <= objectBox.max.z + 0.1) {
+      if (intersectionPoint.x >= objectBox.min.x - 0.5 && 
+          intersectionPoint.x <= objectBox.max.x + 0.5 &&
+          intersectionPoint.z >= objectBox.min.z - 0.5 && 
+          intersectionPoint.z <= objectBox.max.z + 0.5) {
         
         // This object could be a surface to place on
         const surfaceY = objectBox.max.y;
         if (surfaceY > highestY) {
           highestY = surfaceY;
           foundSurface = true;
+          
+          // If we have an intersection normal, use it; otherwise use up vector
+          if (intersectionNormal) {
+            bestNormal = intersectionNormal.clone();
+          }
         }
       }
     }
 
-    // Calculate final position
-    const finalY = highestY + pendingBottomOffset;
-    return new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
+    // Calculate final position and rotation
+    const finalY = foundSurface ? highestY + pendingBottomOffset : intersectionPoint.y;
+    const finalPosition = new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
+    const finalRotation = calculateSurfaceAlignment(bestNormal);
+
+    return { 
+      position: finalPosition, 
+      rotation: finalRotation, 
+      normal: bestNormal 
+    };
   };
 
   useEffect(() => {
@@ -760,42 +799,57 @@ const PlacementHelper = () => {
       // Cast ray from camera through mouse position
       raycaster.setFromCamera(pointer, camera);
       
-      // Create a large ground plane for intersection
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-      const intersection = new THREE.Vector3();
-      
-      // Also check intersections with existing objects
+      // Check intersections with existing objects first
       const intersects = raycaster.intersectObjects(
         objects.filter(obj => obj.visible).map(obj => obj.object), 
         true
       );
 
       let targetPosition: THREE.Vector3;
+      let targetNormal: THREE.Vector3 | undefined;
 
       if (intersects.length > 0) {
-        // Hit an existing object - place on top of it
-        targetPosition = intersects[0].point;
-      } else if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-        // Hit the ground plane
-        targetPosition = intersection;
+        // Hit an existing object - use the intersection point and normal
+        const intersection = intersects[0];
+        targetPosition = intersection.point;
+        targetNormal = intersection.face?.normal.clone();
+        
+        // Transform normal to world space
+        if (targetNormal && intersection.object) {
+          const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersection.object.matrixWorld);
+          targetNormal.applyMatrix3(normalMatrix).normalize();
+        }
       } else {
-        return; // No valid intersection
+        // Hit the ground plane
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const intersection = new THREE.Vector3();
+        
+        if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
+          targetPosition = intersection;
+          targetNormal = new THREE.Vector3(0, 1, 0); // Ground normal
+        } else {
+          return; // No valid intersection
+        }
       }
 
-      // Find the best placement position (accounting for stacking)
-      const placementPosition = findPlacementPosition(targetPosition);
+      // Find the best placement position and orientation
+      const { position, rotation, normal } = findPlacementPositionAndOrientation(targetPosition, targetNormal);
       
-      // Check for collisions at this position
-      const hasCollision = checkCollisions(placementPosition);
+      // Check for collisions at this position and rotation
+      const hasCollision = checkCollisions(position, rotation);
       
-      setHoverPosition(placementPosition);
+      setHoverPosition(position);
+      setHoverRotation(rotation);
+      setSurfaceNormal(normal);
       setCollisionDetected(hasCollision);
     };
 
     const handleClick = (event) => {
       if (event.button === 0 && hoverPosition && !collisionDetected) { // Left click and no collision
-        placeObjectAt(hoverPosition);
+        placeObjectAt(hoverPosition, hoverRotation);
         setHoverPosition(null);
+        setHoverRotation(null);
+        setSurfaceNormal(null);
         setCollisionDetected(false);
       }
     };
@@ -805,6 +859,8 @@ const PlacementHelper = () => {
         event.preventDefault();
         cancelObjectPlacement();
         setHoverPosition(null);
+        setHoverRotation(null);
+        setSurfaceNormal(null);
         setCollisionDetected(false);
       }
     };
@@ -813,6 +869,8 @@ const PlacementHelper = () => {
       if (event.key === 'Escape') {
         cancelObjectPlacement();
         setHoverPosition(null);
+        setHoverRotation(null);
+        setSurfaceNormal(null);
         setCollisionDetected(false);
       }
     };
@@ -828,7 +886,7 @@ const PlacementHelper = () => {
       window.removeEventListener('contextmenu', handleRightClick);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [placementMode, hoverPosition, collisionDetected, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
+  }, [placementMode, hoverPosition, hoverRotation, collisionDetected, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
 
   if (!placementMode || !hoverPosition || !pendingObject) return null;
 
@@ -848,10 +906,25 @@ const PlacementHelper = () => {
   }
 
   return (
-    <primitive 
-      object={previewObject} 
-      position={hoverPosition}
-    />
+    <group>
+      <primitive 
+        object={previewObject} 
+        position={hoverPosition}
+        rotation={hoverRotation || [0, 0, 0]}
+      />
+      
+      {/* Surface normal indicator */}
+      {surfaceNormal && !collisionDetected && (
+        <arrowHelper
+          args={[
+            surfaceNormal,
+            hoverPosition,
+            1,
+            '#00ff00'
+          ]}
+        />
+      )}
+    </group>
   );
 };
 
