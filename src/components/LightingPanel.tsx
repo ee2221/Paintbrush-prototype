@@ -178,6 +178,28 @@ const LightingPanel: React.FC = () => {
     return position.map(p => p.toFixed(1)).join(', ');
   };
 
+  // Helper function to format intensity display
+  const formatIntensity = (intensity: number) => {
+    if (intensity >= 1) {
+      return intensity.toFixed(1);
+    } else if (intensity >= 0.1) {
+      return intensity.toFixed(2);
+    } else {
+      return intensity.toFixed(3);
+    }
+  };
+
+  // Helper function to get intensity step based on current value
+  const getIntensityStep = (intensity: number) => {
+    if (intensity >= 1) {
+      return 0.1;
+    } else if (intensity >= 0.1) {
+      return 0.01;
+    } else {
+      return 0.001;
+    }
+  };
+
   // Collapsed state - just a small tab
   if (isCollapsed) {
     return (
@@ -356,7 +378,7 @@ const LightingPanel: React.FC = () => {
                         </div>
                         <div className="flex justify-between">
                           <span>Intensity:</span>
-                          <span>{light.intensity.toFixed(1)}</span>
+                          <span>{formatIntensity(light.intensity)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span>Color:</span>
@@ -456,25 +478,84 @@ const LightingPanel: React.FC = () => {
                 </div>
               )}
 
-              {/* Intensity */}
+              {/* Intensity - Extended Range */}
               <div>
                 <label className="block text-xs font-medium text-white/70 mb-2 flex items-center gap-1">
                   <Gauge className="w-3 h-3" />
                   Intensity
+                  <span className="text-xs text-white/50 ml-1">(0.001 - 10.0)</span>
                 </label>
-                <div className="flex gap-2 items-center">
-                  <input
-                    type="range"
-                    min="0"
-                    max="5"
-                    step="0.1"
-                    value={selectedLight.intensity}
-                    onChange={(e) => handleLightPropertyChange(selectedLight.id, 'intensity', parseFloat(e.target.value))}
-                    className="flex-1 h-2 bg-[#2a2a2a] rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-sm text-white/90 w-12 text-right">
-                    {selectedLight.intensity.toFixed(1)}
-                  </span>
+                <div className="space-y-2">
+                  {/* Slider for coarse adjustment */}
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="range"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      value={Math.min(selectedLight.intensity, 10)}
+                      onChange={(e) => handleLightPropertyChange(selectedLight.id, 'intensity', parseFloat(e.target.value))}
+                      className="flex-1 h-2 bg-[#2a2a2a] rounded-lg appearance-none cursor-pointer"
+                    />
+                    <span className="text-sm text-white/90 w-16 text-right">
+                      {formatIntensity(selectedLight.intensity)}
+                    </span>
+                  </div>
+                  
+                  {/* Number input for precise control */}
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="0.001"
+                      max="100"
+                      step={getIntensityStep(selectedLight.intensity)}
+                      value={selectedLight.intensity}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 0) {
+                          handleLightPropertyChange(selectedLight.id, 'intensity', value);
+                        }
+                      }}
+                      className="flex-1 bg-[#2a2a2a] border border-white/10 rounded px-2 py-1 text-sm text-white/90 focus:outline-none focus:border-blue-500/50"
+                      placeholder="Enter precise value"
+                    />
+                    
+                    {/* Quick preset buttons */}
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => handleLightPropertyChange(selectedLight.id, 'intensity', 0.01)}
+                        className="px-2 py-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] rounded text-xs text-white/70 border border-white/10"
+                        title="Very dim"
+                      >
+                        0.01
+                      </button>
+                      <button
+                        onClick={() => handleLightPropertyChange(selectedLight.id, 'intensity', 0.1)}
+                        className="px-2 py-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] rounded text-xs text-white/70 border border-white/10"
+                        title="Dim"
+                      >
+                        0.1
+                      </button>
+                      <button
+                        onClick={() => handleLightPropertyChange(selectedLight.id, 'intensity', 1.0)}
+                        className="px-2 py-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] rounded text-xs text-white/70 border border-white/10"
+                        title="Normal"
+                      >
+                        1.0
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Intensity description */}
+                  <div className="text-xs text-white/50">
+                    {selectedLight.intensity < 0.01 && "Ultra dim - barely visible"}
+                    {selectedLight.intensity >= 0.01 && selectedLight.intensity < 0.1 && "Very dim - subtle ambient"}
+                    {selectedLight.intensity >= 0.1 && selectedLight.intensity < 0.5 && "Dim - soft lighting"}
+                    {selectedLight.intensity >= 0.5 && selectedLight.intensity < 1.0 && "Moderate - balanced"}
+                    {selectedLight.intensity >= 1.0 && selectedLight.intensity < 2.0 && "Normal - standard lighting"}
+                    {selectedLight.intensity >= 2.0 && selectedLight.intensity < 5.0 && "Bright - strong illumination"}
+                    {selectedLight.intensity >= 5.0 && "Very bright - intense lighting"}
+                  </div>
                 </div>
               </div>
 
