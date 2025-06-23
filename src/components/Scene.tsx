@@ -645,30 +645,158 @@ const CameraController = () => {
   );
 };
 
-// Placement helper component
+// Placement helper component with collision detection
 const PlacementHelper = () => {
-  const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement } = useSceneStore();
-  const { camera, raycaster, pointer } = useThree();
+  const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement, objects } = useSceneStore();
+  const { camera, raycaster, pointer, scene } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
+  const [collisionDetected, setCollisionDetected] = useState(false);
+
+  // Helper function to get bounding box of an object
+  const getObjectBoundingBox = (object: THREE.Object3D) => {
+    const box = new THREE.Box3();
+    
+    if (object instanceof THREE.Mesh) {
+      box.setFromObject(object);
+    } else if (object instanceof THREE.Group) {
+      // For groups, compute bounding box of all children
+      object.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const childBox = new THREE.Box3().setFromObject(child);
+          box.union(childBox);
+        }
+      });
+    }
+    
+    return box;
+  };
+
+  // Helper function to get approximate bounding box for pending object
+  const getPendingObjectBoundingBox = (position: THREE.Vector3) => {
+    if (!pendingObject) return new THREE.Box3();
+
+    const geometryOrGroup = pendingObject.geometry();
+    let tempObject: THREE.Object3D;
+
+    if (geometryOrGroup instanceof THREE.Group) {
+      tempObject = geometryOrGroup.clone();
+    } else {
+      const material = new THREE.MeshStandardMaterial();
+      tempObject = new THREE.Mesh(geometryOrGroup, material);
+    }
+
+    tempObject.position.copy(position);
+    const box = getObjectBoundingBox(tempObject);
+    
+    // Clean up
+    if (tempObject instanceof THREE.Mesh) {
+      tempObject.geometry.dispose();
+      (tempObject.material as THREE.Material).dispose();
+    }
+
+    return box;
+  };
+
+  // Check for collisions with existing objects
+  const checkCollisions = (position: THREE.Vector3) => {
+    if (!pendingObject) return false;
+
+    const pendingBox = getPendingObjectBoundingBox(position);
+    
+    // Check collision with all visible objects
+    for (const { object, visible } of objects) {
+      if (!visible) continue;
+      
+      const objectBox = getObjectBoundingBox(object);
+      if (pendingBox.intersectsBox(objectBox)) {
+        return true;
+      }
+    }
+    
+    return false;
+  };
+
+  // Find the highest surface to place object on
+  const findPlacementPosition = (intersectionPoint: THREE.Vector3) => {
+    if (!pendingObject) return intersectionPoint;
+
+    const pendingBox = getPendingObjectBoundingBox(intersectionPoint);
+    const pendingHeight = pendingBox.max.y - pendingBox.min.y;
+    const pendingBottomOffset = intersectionPoint.y - pendingBox.min.y;
+
+    let highestY = 0; // Ground level
+    let foundSurface = false;
+
+    // Check all visible objects for surfaces to place on
+    for (const { object, visible } of objects) {
+      if (!visible) continue;
+      
+      const objectBox = getObjectBoundingBox(object);
+      
+      // Check if the object is within X-Z range of where we want to place
+      if (intersectionPoint.x >= objectBox.min.x - 0.1 && 
+          intersectionPoint.x <= objectBox.max.x + 0.1 &&
+          intersectionPoint.z >= objectBox.min.z - 0.1 && 
+          intersectionPoint.z <= objectBox.max.z + 0.1) {
+        
+        // This object could be a surface to place on
+        const surfaceY = objectBox.max.y;
+        if (surfaceY > highestY) {
+          highestY = surfaceY;
+          foundSurface = true;
+        }
+      }
+    }
+
+    // Calculate final position
+    const finalY = highestY + pendingBottomOffset;
+    return new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
+  };
 
   useEffect(() => {
     if (!placementMode) return;
 
     const handlePointerMove = (event) => {
-      // Cast ray to find intersection with ground plane
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      // Cast ray from camera through mouse position
       raycaster.setFromCamera(pointer, camera);
       
+      // Create a large ground plane for intersection
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       const intersection = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-        setHoverPosition(intersection);
+      
+      // Also check intersections with existing objects
+      const intersects = raycaster.intersectObjects(
+        objects.filter(obj => obj.visible).map(obj => obj.object), 
+        true
+      );
+
+      let targetPosition: THREE.Vector3;
+
+      if (intersects.length > 0) {
+        // Hit an existing object - place on top of it
+        targetPosition = intersects[0].point;
+      } else if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
+        // Hit the ground plane
+        targetPosition = intersection;
+      } else {
+        return; // No valid intersection
       }
+
+      // Find the best placement position (accounting for stacking)
+      const placementPosition = findPlacementPosition(targetPosition);
+      
+      // Check for collisions at this position
+      const hasCollision = checkCollisions(placementPosition);
+      
+      setHoverPosition(placementPosition);
+      setCollisionDetected(hasCollision);
     };
 
     const handleClick = (event) => {
-      if (event.button === 0 && hoverPosition) { // Left click
+      if (event.button === 0 && hoverPosition && !collisionDetected) { // Left click and no collision
         placeObjectAt(hoverPosition);
         setHoverPosition(null);
+        setCollisionDetected(false);
       }
     };
 
@@ -677,6 +805,7 @@ const PlacementHelper = () => {
         event.preventDefault();
         cancelObjectPlacement();
         setHoverPosition(null);
+        setCollisionDetected(false);
       }
     };
 
@@ -684,6 +813,7 @@ const PlacementHelper = () => {
       if (event.key === 'Escape') {
         cancelObjectPlacement();
         setHoverPosition(null);
+        setCollisionDetected(false);
       }
     };
 
@@ -698,7 +828,7 @@ const PlacementHelper = () => {
       window.removeEventListener('contextmenu', handleRightClick);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [placementMode, hoverPosition, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement]);
+  }, [placementMode, hoverPosition, collisionDetected, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement, objects, pendingObject]);
 
   if (!placementMode || !hoverPosition || !pendingObject) return null;
 
@@ -710,9 +840,9 @@ const PlacementHelper = () => {
     previewObject = geometryOrGroup.clone();
   } else {
     const material = new THREE.MeshStandardMaterial({ 
-      color: pendingObject.color || '#44aa88',
+      color: collisionDetected ? '#ff4444' : (pendingObject.color || '#44aa88'),
       transparent: true,
-      opacity: 0.5
+      opacity: collisionDetected ? 0.3 : 0.5
     });
     previewObject = new THREE.Mesh(geometryOrGroup, material);
   }
