@@ -55,6 +55,8 @@ const ObjectProperties: React.FC = () => {
       if (wireframeMat) {
         setWireframeColor('#' + wireframeMat.color.getHexString());
         setWireframeOpacity(wireframeMat.opacity);
+        // Get linewidth from userData since THREE.js doesn't support it directly in WebGL
+        setWireframeLinewidth(selectedObject.userData.wireframeLinewidth || 1);
       }
     }
   }, [selectedObject, material]);
@@ -96,6 +98,55 @@ const ObjectProperties: React.FC = () => {
     return edges;
   };
 
+  const createThickWireframe = (geometry: THREE.BufferGeometry, linewidth: number) => {
+    // For thick lines, we need to use a different approach since WebGL doesn't support linewidth > 1
+    // We'll create tube geometry along the edges
+    if (linewidth <= 1) {
+      return createWireframeGeometry(geometry);
+    }
+
+    const edges = new THREE.EdgesGeometry(geometry);
+    const positions = edges.attributes.position;
+    const group = new THREE.Group();
+
+    // Create tubes for each edge
+    for (let i = 0; i < positions.count; i += 2) {
+      const start = new THREE.Vector3(
+        positions.getX(i),
+        positions.getY(i),
+        positions.getZ(i)
+      );
+      const end = new THREE.Vector3(
+        positions.getX(i + 1),
+        positions.getY(i + 1),
+        positions.getZ(i + 1)
+      );
+
+      const direction = end.clone().sub(start);
+      const length = direction.length();
+      
+      if (length > 0.001) { // Avoid zero-length edges
+        const tubeGeometry = new THREE.CylinderGeometry(
+          linewidth * 0.01, // radius based on linewidth
+          linewidth * 0.01,
+          length,
+          4 // low segment count for performance
+        );
+
+        const tubeMesh = new THREE.Mesh(tubeGeometry);
+        
+        // Position and orient the tube
+        tubeMesh.position.copy(start.clone().add(end).multiplyScalar(0.5));
+        tubeMesh.lookAt(end);
+        tubeMesh.rotateX(Math.PI / 2);
+
+        group.add(tubeMesh);
+      }
+    }
+
+    return group;
+  };
+
   const toggleWireframe = () => {
     if (objectLocked || !(selectedObject instanceof THREE.Mesh)) return;
 
@@ -109,19 +160,35 @@ const ObjectProperties: React.FC = () => {
 
       if (!wireframeObj || !wireframeMat) {
         // Create new wireframe
-        const wireframeGeometry = createWireframeGeometry(selectedObject.geometry);
         wireframeMat = new THREE.LineBasicMaterial({
           color: wireframeColor,
           transparent: true,
-          opacity: wireframeOpacity,
-          linewidth: wireframeLinewidth
+          opacity: wireframeOpacity
         });
 
-        wireframeObj = new THREE.LineSegments(wireframeGeometry, wireframeMat);
+        if (wireframeLinewidth <= 1) {
+          // Use standard line segments for thin lines
+          const wireframeGeometry = createWireframeGeometry(selectedObject.geometry);
+          wireframeObj = new THREE.LineSegments(wireframeGeometry, wireframeMat);
+        } else {
+          // Use tube geometry for thick lines
+          const thickWireframe = createThickWireframe(selectedObject.geometry, wireframeLinewidth);
+          wireframeObj = thickWireframe;
+          
+          // Apply material to all children if it's a group
+          if (thickWireframe instanceof THREE.Group) {
+            thickWireframe.traverse((child) => {
+              if (child instanceof THREE.Mesh) {
+                child.material = wireframeMat;
+              }
+            });
+          }
+        }
         
         // Store references
         selectedObject.userData.wireframeObject = wireframeObj;
         selectedObject.userData.wireframeMaterial = wireframeMat;
+        selectedObject.userData.wireframeLinewidth = wireframeLinewidth;
         
         // Add to the mesh
         selectedObject.add(wireframeObj);
@@ -163,14 +230,61 @@ const ObjectProperties: React.FC = () => {
   };
 
   const handleWireframeLinewidthChange = (linewidth: number) => {
-    if (objectLocked) return;
+    if (objectLocked || !(selectedObject instanceof THREE.Mesh)) return;
     setWireframeLinewidth(linewidth);
 
-    const wireframeMat = getWireframeMaterial();
-    if (wireframeMat) {
-      wireframeMat.linewidth = linewidth;
-      wireframeMat.needsUpdate = true;
+    // Store the linewidth value
+    selectedObject.userData.wireframeLinewidth = linewidth;
+
+    // Recreate wireframe with new linewidth if it's currently visible
+    if (showWireframe) {
+      const oldWireframeObj = getWireframeObject();
+      const wireframeMat = getWireframeMaterial();
+      
+      if (oldWireframeObj && wireframeMat) {
+        // Remove old wireframe
+        selectedObject.remove(oldWireframeObj);
+        
+        // Dispose of old geometry
+        if (oldWireframeObj instanceof THREE.LineSegments) {
+          oldWireframeObj.geometry.dispose();
+        } else if (oldWireframeObj instanceof THREE.Group) {
+          oldWireframeObj.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+            }
+          });
+        }
+
+        // Create new wireframe with updated linewidth
+        let newWireframeObj;
+        
+        if (linewidth <= 1) {
+          // Use standard line segments for thin lines
+          const wireframeGeometry = createWireframeGeometry(selectedObject.geometry);
+          newWireframeObj = new THREE.LineSegments(wireframeGeometry, wireframeMat);
+        } else {
+          // Use tube geometry for thick lines
+          const thickWireframe = createThickWireframe(selectedObject.geometry, linewidth);
+          newWireframeObj = thickWireframe;
+          
+          // Apply material to all children if it's a group
+          if (thickWireframe instanceof THREE.Group) {
+            thickWireframe.traverse((child) => {
+              if (child instanceof THREE.Mesh) {
+                child.material = wireframeMat;
+              }
+            });
+          }
+        }
+
+        // Update reference and add to mesh
+        selectedObject.userData.wireframeObject = newWireframeObj;
+        selectedObject.add(newWireframeObj);
+      }
     }
+
+    updateObjectProperties();
   };
 
   return (
@@ -402,12 +516,17 @@ const ObjectProperties: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-white/70 mb-2">Line Width</label>
+                    <label className="block text-xs font-medium text-white/70 mb-2">
+                      Line Thickness
+                      {wireframeLinewidth > 1 && (
+                        <span className="text-xs text-blue-400 ml-1">(3D tubes)</span>
+                      )}
+                    </label>
                     <div className="flex gap-2 items-center">
                       <input
                         type="range"
                         min="1"
-                        max="5"
+                        max="10"
                         step="0.5"
                         value={wireframeLinewidth}
                         onChange={(e) => handleWireframeLinewidthChange(parseFloat(e.target.value))}
@@ -421,9 +540,15 @@ const ObjectProperties: React.FC = () => {
                       <span className={`text-sm w-12 text-right ${
                         objectLocked ? 'text-white/30' : 'text-white/90'
                       }`}>
-                        {wireframeLinewidth}px
+                        {wireframeLinewidth}
                       </span>
                     </div>
+                    <p className="text-xs text-white/50 mt-1">
+                      {wireframeLinewidth <= 1 
+                        ? 'Thin lines (standard wireframe)'
+                        : 'Thick lines (3D tube geometry)'
+                      }
+                    </p>
                   </div>
                 </div>
               )}
