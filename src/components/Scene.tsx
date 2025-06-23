@@ -645,11 +645,12 @@ const CameraController = () => {
   );
 };
 
-// Placement helper component with improved stacking
+// Enhanced placement helper component with sideways stacking
 const PlacementHelper = () => {
   const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement, objects } = useSceneStore();
   const { camera, raycaster, pointer, scene } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
+  const [surfaceNormal, setSurfaceNormal] = useState<THREE.Vector3 | null>(null);
 
   // Helper function to get bounding box of an object
   const getObjectBoundingBox = (object: THREE.Object3D) => {
@@ -696,16 +697,41 @@ const PlacementHelper = () => {
     return box;
   };
 
-  // Find the highest surface to place object on (improved stacking logic)
-  const findPlacementPosition = (intersectionPoint: THREE.Vector3) => {
+  // Enhanced placement logic with sideways stacking
+  const findPlacementPosition = (intersectionPoint: THREE.Vector3, normal?: THREE.Vector3) => {
     if (!pendingObject) return intersectionPoint;
 
     // Create a temporary object to get its dimensions
     const tempBox = getPendingObjectBoundingBox(intersectionPoint);
-    const objectHeight = tempBox.max.y - tempBox.min.y;
-    const objectWidth = tempBox.max.x - tempBox.min.x;
-    const objectDepth = tempBox.max.z - tempBox.min.z;
+    const objectDimensions = {
+      width: tempBox.max.x - tempBox.min.x,
+      height: tempBox.max.y - tempBox.min.y,
+      depth: tempBox.max.z - tempBox.min.z
+    };
 
+    // If we have a surface normal, use it for placement
+    if (normal) {
+      // Calculate offset based on surface normal and object dimensions
+      let offset = 0;
+      
+      // Determine which dimension to use based on the normal direction
+      if (Math.abs(normal.y) > 0.8) {
+        // Mostly vertical surface (top/bottom)
+        offset = objectDimensions.height / 2;
+      } else if (Math.abs(normal.x) > Math.abs(normal.z)) {
+        // Mostly X-axis surface (left/right)
+        offset = objectDimensions.width / 2;
+      } else {
+        // Mostly Z-axis surface (front/back)
+        offset = objectDimensions.depth / 2;
+      }
+
+      // Place object on the surface with proper offset
+      const placementPosition = intersectionPoint.clone().add(normal.clone().multiplyScalar(offset));
+      return placementPosition;
+    }
+
+    // Fallback to ground placement if no normal
     let highestY = 0; // Ground level
     const tolerance = 0.5; // How close objects need to be to stack
 
@@ -717,9 +743,9 @@ const PlacementHelper = () => {
       
       // Check if the object is within stacking range (X-Z plane)
       const xOverlap = Math.abs(intersectionPoint.x - (objectBox.min.x + objectBox.max.x) / 2) < 
-                      (objectWidth / 2 + (objectBox.max.x - objectBox.min.x) / 2 + tolerance);
+                      (objectDimensions.width / 2 + (objectBox.max.x - objectBox.min.x) / 2 + tolerance);
       const zOverlap = Math.abs(intersectionPoint.z - (objectBox.min.z + objectBox.max.z) / 2) < 
-                      (objectDepth / 2 + (objectBox.max.z - objectBox.min.z) / 2 + tolerance);
+                      (objectDimensions.depth / 2 + (objectBox.max.z - objectBox.min.z) / 2 + tolerance);
       
       if (xOverlap && zOverlap) {
         // This object could be a surface to place on
@@ -731,7 +757,7 @@ const PlacementHelper = () => {
     }
 
     // Place the object so its bottom sits on the highest surface
-    const finalY = highestY + (objectHeight / 2);
+    const finalY = highestY + (objectDimensions.height / 2);
     return new THREE.Vector3(intersectionPoint.x, finalY, intersectionPoint.z);
   };
 
@@ -742,30 +768,44 @@ const PlacementHelper = () => {
       // Cast ray from camera through mouse position
       raycaster.setFromCamera(pointer, camera);
       
-      // Create a large ground plane for intersection
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-      const intersection = new THREE.Vector3();
-      
-      // Also check intersections with existing objects
+      // Check intersections with existing objects first
       const intersects = raycaster.intersectObjects(
         objects.filter(obj => obj.visible).map(obj => obj.object), 
         true
       );
 
       let targetPosition: THREE.Vector3;
+      let normal: THREE.Vector3 | null = null;
 
       if (intersects.length > 0) {
-        // Hit an existing object - use the intersection point
-        targetPosition = intersects[0].point;
-      } else if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-        // Hit the ground plane
-        targetPosition = intersection;
+        // Hit an existing object - use the intersection point and normal
+        const intersection = intersects[0];
+        targetPosition = intersection.point;
+        normal = intersection.face?.normal?.clone();
+        
+        // Transform normal to world space
+        if (normal && intersection.object) {
+          const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersection.object.matrixWorld);
+          normal.applyMatrix3(normalMatrix).normalize();
+        }
+        
+        setSurfaceNormal(normal);
       } else {
-        return; // No valid intersection
+        // Check intersection with ground plane
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const intersection = new THREE.Vector3();
+        
+        if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
+          targetPosition = intersection;
+          normal = new THREE.Vector3(0, 1, 0); // Ground normal
+          setSurfaceNormal(normal);
+        } else {
+          return; // No valid intersection
+        }
       }
 
-      // Find the best placement position (accounting for stacking)
-      const placementPosition = findPlacementPosition(targetPosition);
+      // Find the best placement position (accounting for surface orientation)
+      const placementPosition = findPlacementPosition(targetPosition, normal);
       
       setHoverPosition(placementPosition);
     };
@@ -774,6 +814,7 @@ const PlacementHelper = () => {
       if (event.button === 0 && hoverPosition) { // Left click
         placeObjectAt(hoverPosition);
         setHoverPosition(null);
+        setSurfaceNormal(null);
       }
     };
 
@@ -782,6 +823,7 @@ const PlacementHelper = () => {
         event.preventDefault();
         cancelObjectPlacement();
         setHoverPosition(null);
+        setSurfaceNormal(null);
       }
     };
 
@@ -789,6 +831,7 @@ const PlacementHelper = () => {
       if (event.key === 'Escape') {
         cancelObjectPlacement();
         setHoverPosition(null);
+        setSurfaceNormal(null);
       }
     };
 
@@ -823,10 +866,24 @@ const PlacementHelper = () => {
   }
 
   return (
-    <primitive 
-      object={previewObject} 
-      position={hoverPosition}
-    />
+    <group>
+      <primitive 
+        object={previewObject} 
+        position={hoverPosition}
+      />
+      
+      {/* Surface normal indicator */}
+      {surfaceNormal && (
+        <arrowHelper
+          args={[
+            surfaceNormal,
+            hoverPosition,
+            1,
+            '#00ff00'
+          ]}
+        />
+      )}
+    </group>
   );
 };
 
