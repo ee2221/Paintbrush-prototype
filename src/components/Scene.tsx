@@ -655,14 +655,17 @@ const PlacementHelper = () => {
     if (!placementMode) return;
 
     const handlePointerMove = (event) => {
-      // Cast ray to find intersection with ground plane
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      // Cast ray from camera through mouse position
       raycaster.setFromCamera(pointer, camera);
       
-      const intersection = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-        setHoverPosition(intersection);
-      }
+      // Create an invisible plane at a reasonable distance from camera
+      const distance = 5; // Fixed distance from camera
+      const cameraDirection = new THREE.Vector3();
+      camera.getWorldDirection(cameraDirection);
+      
+      // Calculate position at fixed distance from camera
+      const position = camera.position.clone().add(cameraDirection.multiplyScalar(distance));
+      setHoverPosition(position);
     };
 
     const handleClick = (event) => {
