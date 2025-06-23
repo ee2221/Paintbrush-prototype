@@ -809,9 +809,22 @@ const Scene: React.FC = () => {
         onContextMenu={(e) => e.preventDefault()} // Prevent default right-click menu
         shadows
       >
-        <ambientLight intensity={0.3} />
+        {/* Default Scene Lighting - Always present for basic illumination */}
+        <ambientLight intensity={0.4} />
+        <directionalLight 
+          position={[10, 10, 5]} 
+          intensity={0.8} 
+          castShadow 
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-camera-far={50}
+          shadow-camera-left={-10}
+          shadow-camera-right={10}
+          shadow-camera-top={10}
+          shadow-camera-bottom={-10}
+        />
         
-        {/* Scene Lights */}
+        {/* User-created Scene Lights */}
         <SceneLights />
         
         <Grid
