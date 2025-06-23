@@ -521,66 +521,18 @@ const EditModeOverlay = () => {
   );
 };
 
-// Scene Lights Component - Global lighting that affects all objects and the ground plane
+// Scene Lights Component
 const SceneLights = () => {
   const { lights } = useSceneStore();
-  const { scene } = useThree();
-
-  useEffect(() => {
-    // Clear existing user lights from scene
-    const existingLights = scene.children.filter(child => 
-      child instanceof THREE.Light && child.userData.isUserLight
-    );
-    existingLights.forEach(light => scene.remove(light));
-
-    // Add all visible user lights to the scene
-    lights.forEach(light => {
-      if (light.visible && light.object) {
-        light.object.userData.isUserLight = true;
-        scene.add(light.object);
-        
-        // Add target for directional and spot lights
-        if (light.type === 'directional' || light.type === 'spot') {
-          const target = (light.object as any).target;
-          if (target) {
-            scene.add(target);
-          }
-        }
-      }
-    });
-
-    return () => {
-      // Cleanup on unmount
-      const userLights = scene.children.filter(child => 
-        child instanceof THREE.Light && child.userData.isUserLight
-      );
-      userLights.forEach(light => scene.remove(light));
-    };
-  }, [lights, scene]);
-
-  return null; // Lights are added directly to the scene
-};
-
-// Enhanced Ground Plane Component that receives lighting
-const GroundPlane = () => {
-  const groundRef = useRef<THREE.Mesh>(null);
 
   return (
-    <mesh 
-      ref={groundRef}
-      rotation={[-Math.PI / 2, 0, 0]} 
-      position={[0, -0.01, 0]}
-      receiveShadow
-    >
-      <planeGeometry args={[100, 100]} />
-      <meshStandardMaterial 
-        color="#2a2a2a" 
-        transparent 
-        opacity={0.8}
-        roughness={0.8}
-        metalness={0.1}
-      />
-    </mesh>
+    <group>
+      {lights.map(light => {
+        if (!light.visible || !light.object) return null;
+        
+        return <primitive key={light.id} object={light.object} />;
+      })}
+    </group>
   );
 };
 
@@ -1053,16 +1005,24 @@ const Scene: React.FC = () => {
         onContextMenu={(e) => e.preventDefault()} // Prevent default right-click menu
         shadows
       >
-        {/* Default Ambient Light - Provides base illumination */}
-        <ambientLight intensity={0.3} color="#ffffff" />
+        {/* Default Scene Lighting - Always present for basic illumination */}
+        <ambientLight intensity={0.4} />
+        <directionalLight 
+          position={[10, 10, 5]} 
+          intensity={0.8} 
+          castShadow 
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-camera-far={50}
+          shadow-camera-left={-10}
+          shadow-camera-right={10}
+          shadow-camera-top={10}
+          shadow-camera-bottom={-10}
+        />
         
-        {/* User-created Scene Lights - Global lighting that affects everything */}
+        {/* User-created Scene Lights */}
         <SceneLights />
         
-        {/* Enhanced Ground Plane that receives lighting and shadows */}
-        <GroundPlane />
-        
-        {/* Grid overlay */}
         <Grid
           infiniteGrid
           cellSize={1}
@@ -1071,7 +1031,6 @@ const Scene: React.FC = () => {
           fadeStrength={1}
         />
 
-        {/* Scene Objects - All receive lighting and cast shadows */}
         {objects.map(({ object, visible, id }) => (
           visible && (
             <primitive
@@ -1089,7 +1048,6 @@ const Scene: React.FC = () => {
           )
         ))}
 
-        {/* Transform Controls */}
         {selectedObject && transformMode && canSelectObject(selectedObject) && !placementMode && (
           <TransformControls
             object={selectedObject}
@@ -1097,20 +1055,11 @@ const Scene: React.FC = () => {
           />
         )}
 
-        {/* Edit Mode Overlays */}
         <EditModeOverlay />
-        
-        {/* Object Placement Helper */}
         <PlacementHelper />
-        
-        {/* Light Helpers and Visualizations */}
         <LightHelpers lights={lights} selectedLight={selectedLight} />
-        
-        {/* Camera Controls */}
         <CameraController />
       </Canvas>
-      
-      {/* UI Overlays */}
       {editMode === 'vertex' && selectedPosition && (
         <VertexCoordinates 
           position={selectedPosition}
