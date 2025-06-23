@@ -4,6 +4,23 @@ import * as THREE from 'three';
 type EditMode = 'vertex' | 'edge' | null;
 type CameraPerspective = 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 
+interface Light {
+  id: string;
+  name: string;
+  type: 'directional' | 'point' | 'spot';
+  position: number[];
+  target: number[];
+  intensity: number;
+  color: string;
+  visible: boolean;
+  castShadow: boolean;
+  distance: number;
+  decay: number;
+  angle: number;
+  penumbra: number;
+  object?: THREE.Light;
+}
+
 interface Group {
   id: string;
   name: string;
@@ -23,6 +40,7 @@ interface HistoryState {
     groupId?: string;
   }>;
   groups: Group[];
+  lights: Light[];
 }
 
 interface SceneState {
@@ -35,6 +53,8 @@ interface SceneState {
     groupId?: string;
   }>;
   groups: Group[];
+  lights: Light[];
+  selectedLight: Light | null;
   selectedObject: THREE.Object3D | null;
   transformMode: 'translate' | 'rotate' | 'scale' | null;
   editMode: EditMode;
@@ -112,6 +132,12 @@ interface SceneState {
   startObjectPlacement: (objectDef: { geometry: () => THREE.BufferGeometry | THREE.Group; name: string; color?: string }) => void;
   placeObjectAt: (position: THREE.Vector3) => void;
   cancelObjectPlacement: () => void;
+  // Light management functions
+  addLight: (type: 'directional' | 'point' | 'spot', position?: number[]) => void;
+  removeLight: (lightId: string) => void;
+  updateLight: (lightId: string, properties: Partial<Light>) => void;
+  toggleLightVisibility: (lightId: string) => void;
+  setSelectedLight: (light: Light | null) => void;
   // Helper functions
   isObjectLocked: (objectId: string) => boolean;
   canSelectObject: (object: THREE.Object3D) => boolean;
@@ -135,9 +161,38 @@ const cloneObject = (obj: THREE.Object3D): THREE.Object3D => {
   return obj.clone();
 };
 
+const createLight = (type: 'directional' | 'point' | 'spot', position: number[], target: number[] = [0, 0, 0]): THREE.Light => {
+  let light: THREE.Light;
+  
+  switch (type) {
+    case 'directional':
+      light = new THREE.DirectionalLight('#ffffff', 1);
+      light.position.set(...position);
+      (light as THREE.DirectionalLight).target.position.set(...target);
+      break;
+    case 'point':
+      light = new THREE.PointLight('#ffffff', 1, 0, 2);
+      light.position.set(...position);
+      break;
+    case 'spot':
+      light = new THREE.SpotLight('#ffffff', 1, 0, Math.PI / 3, 0, 2);
+      light.position.set(...position);
+      (light as THREE.SpotLight).target.position.set(...target);
+      break;
+    default:
+      light = new THREE.PointLight('#ffffff', 1);
+      light.position.set(...position);
+  }
+  
+  light.castShadow = true;
+  return light;
+};
+
 export const useSceneStore = create<SceneState>((set, get) => ({
   objects: [],
   groups: [],
+  lights: [],
+  selectedLight: null,
   selectedObject: null,
   transformMode: null,
   editMode: null,
@@ -166,7 +221,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         ...obj,
         object: cloneObject(obj.object)
       })),
-      groups: JSON.parse(JSON.stringify(state.groups))
+      groups: JSON.parse(JSON.stringify(state.groups)),
+      lights: JSON.parse(JSON.stringify(state.lights.map(light => ({
+        ...light,
+        object: undefined // Don't clone the THREE.js object
+      }))))
     };
 
     const newHistory = state.history.slice(0, state.historyIndex + 1);
@@ -877,10 +936,15 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         ...state,
         objects: previousState.objects,
         groups: previousState.groups,
+        lights: previousState.lights.map(light => ({
+          ...light,
+          object: createLight(light.type, light.position, light.target)
+        })),
         historyIndex: state.historyIndex - 1,
         canUndo: state.historyIndex - 1 > 0,
         canRedo: true,
-        selectedObject: null // Clear selection on undo
+        selectedObject: null, // Clear selection on undo
+        selectedLight: null
       };
     }),
 
@@ -894,10 +958,15 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         ...state,
         objects: nextState.objects,
         groups: nextState.groups,
+        lights: nextState.lights.map(light => ({
+          ...light,
+          object: createLight(light.type, light.position, light.target)
+        })),
         historyIndex: state.historyIndex + 1,
         canUndo: true,
         canRedo: state.historyIndex + 1 < state.history.length - 1,
-        selectedObject: null // Clear selection on redo
+        selectedObject: null, // Clear selection on redo
+        selectedLight: null
       };
     }),
 
@@ -1023,6 +1092,109 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       placementMode: false,
       pendingObject: null
     }),
+
+  // Light management functions
+  addLight: (type, position = [2, 2, 2]) =>
+    set((state) => {
+      const lightCount = state.lights.filter(l => l.type === type).length;
+      const newLight: Light = {
+        id: crypto.randomUUID(),
+        name: `${type.charAt(0).toUpperCase() + type.slice(1)} Light ${lightCount + 1}`,
+        type,
+        position: [...position],
+        target: [0, 0, 0],
+        intensity: 1,
+        color: '#ffffff',
+        visible: true,
+        castShadow: true,
+        distance: type === 'directional' ? 0 : 10,
+        decay: 2,
+        angle: Math.PI / 3,
+        penumbra: 0,
+        object: createLight(type, position, [0, 0, 0])
+      };
+
+      get().saveToHistory();
+
+      return {
+        lights: [...state.lights, newLight],
+        selectedLight: newLight
+      };
+    }),
+
+  removeLight: (lightId) =>
+    set((state) => {
+      const updatedLights = state.lights.filter(light => light.id !== lightId);
+      
+      get().saveToHistory();
+
+      return {
+        lights: updatedLights,
+        selectedLight: state.selectedLight?.id === lightId ? null : state.selectedLight
+      };
+    }),
+
+  updateLight: (lightId, properties) =>
+    set((state) => {
+      const updatedLights = state.lights.map(light => {
+        if (light.id === lightId) {
+          const updatedLight = { ...light, ...properties };
+          
+          // Update the THREE.js light object
+          if (updatedLight.object) {
+            const threeLight = updatedLight.object;
+            
+            // Update common properties
+            threeLight.intensity = updatedLight.intensity;
+            threeLight.color.setStyle(updatedLight.color);
+            threeLight.visible = updatedLight.visible;
+            threeLight.castShadow = updatedLight.castShadow;
+            threeLight.position.set(...updatedLight.position);
+            
+            // Update type-specific properties
+            if (updatedLight.type === 'directional' && threeLight instanceof THREE.DirectionalLight) {
+              threeLight.target.position.set(...updatedLight.target);
+            } else if (updatedLight.type === 'point' && threeLight instanceof THREE.PointLight) {
+              threeLight.distance = updatedLight.distance;
+              threeLight.decay = updatedLight.decay;
+            } else if (updatedLight.type === 'spot' && threeLight instanceof THREE.SpotLight) {
+              threeLight.target.position.set(...updatedLight.target);
+              threeLight.distance = updatedLight.distance;
+              threeLight.decay = updatedLight.decay;
+              threeLight.angle = updatedLight.angle;
+              threeLight.penumbra = updatedLight.penumbra;
+            }
+          }
+          
+          return updatedLight;
+        }
+        return light;
+      });
+
+      return {
+        lights: updatedLights,
+        selectedLight: state.selectedLight?.id === lightId 
+          ? updatedLights.find(l => l.id === lightId) || null
+          : state.selectedLight
+      };
+    }),
+
+  toggleLightVisibility: (lightId) =>
+    set((state) => {
+      const updatedLights = state.lights.map(light =>
+        light.id === lightId ? { ...light, visible: !light.visible } : light
+      );
+
+      // Update the THREE.js object
+      const light = updatedLights.find(l => l.id === lightId);
+      if (light?.object) {
+        light.object.visible = light.visible;
+      }
+
+      return { lights: updatedLights };
+    }),
+
+  setSelectedLight: (light) => set({ selectedLight: light }),
 
   // Helper functions
   isObjectLocked: (objectId) => {

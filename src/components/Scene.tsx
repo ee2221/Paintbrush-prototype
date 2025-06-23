@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, TransformControls, Grid } from '@react-three/drei';
 import { useSceneStore } from '../store/sceneStore';
+import LightHelpers from './LightHelpers';
 import * as THREE from 'three';
 
 const VertexCoordinates = ({ position, onPositionChange }) => {
@@ -520,6 +521,21 @@ const EditModeOverlay = () => {
   );
 };
 
+// Scene Lights Component
+const SceneLights = () => {
+  const { lights } = useSceneStore();
+
+  return (
+    <group>
+      {lights.map(light => {
+        if (!light.visible || !light.object) return null;
+        
+        return <primitive key={light.id} object={light.object} />;
+      })}
+    </group>
+  );
+};
+
 // Camera controller component
 const CameraController = () => {
   const { camera } = useThree();
@@ -712,6 +728,8 @@ const PlacementHelper = () => {
 const Scene: React.FC = () => {
   const { 
     objects, 
+    lights,
+    selectedLight,
     selectedObject, 
     setSelectedObject, 
     transformMode, 
@@ -789,9 +807,12 @@ const Scene: React.FC = () => {
         camera={{ position: [5, 5, 5], fov: 75 }}
         className="w-full h-full bg-gray-900"
         onContextMenu={(e) => e.preventDefault()} // Prevent default right-click menu
+        shadows
       >
-        <ambientLight intensity={0.5} />
-        <directionalLight position={[10, 10, 5]} intensity={1} />
+        <ambientLight intensity={0.3} />
+        
+        {/* Scene Lights */}
+        <SceneLights />
         
         <Grid
           infiniteGrid
@@ -806,6 +827,8 @@ const Scene: React.FC = () => {
             <primitive
               key={id}
               object={object}
+              castShadow
+              receiveShadow
               onClick={(e) => {
                 e.stopPropagation();
                 if (!placementMode && canSelectObject(object)) {
@@ -825,6 +848,7 @@ const Scene: React.FC = () => {
 
         <EditModeOverlay />
         <PlacementHelper />
+        <LightHelpers lights={lights} selectedLight={selectedLight} />
         <CameraController />
       </Canvas>
       {editMode === 'vertex' && selectedPosition && (
