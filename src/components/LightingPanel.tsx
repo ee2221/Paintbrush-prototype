@@ -14,7 +14,9 @@ import {
   ChevronRight,
   Move3D,
   Palette,
-  Gauge
+  Gauge,
+  ChevronLeft,
+  ChevronUp
 } from 'lucide-react';
 import { useSceneStore } from '../store/sceneStore';
 
@@ -30,6 +32,7 @@ const LightingPanel: React.FC = () => {
     selectedObject
   } = useSceneStore();
 
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [expandedSections, setExpandedSections] = useState<string[]>(['lights']);
   const [showAddMenu, setShowAddMenu] = useState(false);
 
@@ -83,39 +86,65 @@ const LightingPanel: React.FC = () => {
     return position.map(p => p.toFixed(1)).join(', ');
   };
 
+  // Collapsed state - just a small tab
+  if (isCollapsed) {
+    return (
+      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-[#1a1a1a] rounded-lg shadow-2xl shadow-black/20 border border-white/5">
+        <button
+          onClick={() => setIsCollapsed(false)}
+          className="p-3 hover:bg-white/10 rounded-lg transition-colors text-white/90 flex items-center gap-2"
+          title="Open Lighting Panel"
+        >
+          <Lightbulb className="w-5 h-5 text-yellow-400" />
+          <span className="text-sm font-medium">Lighting ({lights.length})</span>
+          <ChevronUp className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="absolute left-4 top-1/2 transform -translate-y-1/2 bg-[#1a1a1a] rounded-xl shadow-2xl shadow-black/20 p-4 w-80 border border-white/5 max-h-[80vh] overflow-y-auto">
+    <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-[#1a1a1a] rounded-xl shadow-2xl shadow-black/20 p-4 w-96 border border-white/5 max-h-[70vh] overflow-y-auto">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-white/90 flex items-center gap-2">
           <Lightbulb className="w-5 h-5 text-yellow-400" />
           Lighting
         </h2>
-        <div className="relative">
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button
+              onClick={() => setShowAddMenu(!showAddMenu)}
+              className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-white/70"
+              title="Add Light"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+            
+            {showAddMenu && (
+              <div className="absolute right-0 bottom-8 bg-[#2a2a2a] border border-white/10 rounded-lg shadow-lg z-20 min-w-56">
+                {lightTypes.map(({ type, name, icon: Icon, description }) => (
+                  <button
+                    key={type}
+                    onClick={() => handleAddLight(type)}
+                    className="w-full px-4 py-3 text-left hover:bg-white/5 flex items-start gap-3 first:rounded-t-lg last:rounded-b-lg"
+                  >
+                    <Icon className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="text-sm font-medium text-white/90">{name}</div>
+                      <div className="text-xs text-white/60 mt-0.5">{description}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
-            onClick={() => setShowAddMenu(!showAddMenu)}
+            onClick={() => setIsCollapsed(true)}
             className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-white/70"
-            title="Add Light"
+            title="Collapse Panel"
           >
-            <Plus className="w-4 h-4" />
+            <ChevronDown className="w-4 h-4" />
           </button>
-          
-          {showAddMenu && (
-            <div className="absolute right-0 top-8 bg-[#2a2a2a] border border-white/10 rounded-lg shadow-lg z-20 min-w-56">
-              {lightTypes.map(({ type, name, icon: Icon, description }) => (
-                <button
-                  key={type}
-                  onClick={() => handleAddLight(type)}
-                  className="w-full px-4 py-3 text-left hover:bg-white/5 flex items-start gap-3 first:rounded-t-lg last:rounded-b-lg"
-                >
-                  <Icon className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <div className="text-sm font-medium text-white/90">{name}</div>
-                    <div className="text-xs text-white/60 mt-0.5">{description}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
