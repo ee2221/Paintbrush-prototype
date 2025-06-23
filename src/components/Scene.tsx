@@ -521,7 +521,7 @@ const EditModeOverlay = () => {
   );
 };
 
-// Scene Lights Component - Global lighting that affects all objects and the ground plane
+// Scene Lights Component - Additional lighting that supplements default lighting
 const SceneLights = () => {
   const { lights } = useSceneStore();
   const { scene } = useThree();
@@ -1053,10 +1053,22 @@ const Scene: React.FC = () => {
         onContextMenu={(e) => e.preventDefault()} // Prevent default right-click menu
         shadows
       >
-        {/* Default Ambient Light - Provides base illumination */}
-        <ambientLight intensity={0.3} color="#ffffff" />
+        {/* Default Scene Lighting - Always present for basic illumination */}
+        <ambientLight intensity={0.5} color="#ffffff" />
+        <directionalLight 
+          position={[10, 10, 5]} 
+          intensity={1} 
+          castShadow
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-camera-far={50}
+          shadow-camera-left={-10}
+          shadow-camera-right={10}
+          shadow-camera-top={10}
+          shadow-camera-bottom={-10}
+        />
         
-        {/* User-created Scene Lights - Global lighting that affects everything */}
+        {/* User-created Scene Lights - Additional lighting that supplements default */}
         <SceneLights />
         
         {/* Enhanced Ground Plane that receives lighting and shadows */}
