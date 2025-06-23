@@ -645,54 +645,30 @@ const CameraController = () => {
   );
 };
 
-// Enhanced placement helper component with collision-free movement
+// Placement helper component
 const PlacementHelper = () => {
   const { placementMode, pendingObject, placeObjectAt, cancelObjectPlacement } = useSceneStore();
-  const { camera, raycaster, pointer, scene } = useThree();
+  const { camera, raycaster, pointer } = useThree();
   const [hoverPosition, setHoverPosition] = useState<THREE.Vector3 | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     if (!placementMode) return;
 
     const handlePointerMove = (event) => {
-      // Create raycaster for mouse position
+      // Cast ray to find intersection with ground plane
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       raycaster.setFromCamera(pointer, camera);
       
-      // Create an invisible plane at y=0 for placement
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       const intersection = new THREE.Vector3();
-      
-      // If we're dragging, use the plane intersection
-      if (isDragging || raycaster.ray.intersectPlane(groundPlane, intersection)) {
+      if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
         setHoverPosition(intersection);
-      } else {
-        // Fallback: raycast against existing objects and ground
-        const intersects = raycaster.intersectObjects(scene.children, true);
-        if (intersects.length > 0) {
-          setHoverPosition(intersects[0].point);
-        } else {
-          // Use ground plane as fallback
-          if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-            setHoverPosition(intersection);
-          }
-        }
       }
     };
 
-    const handlePointerDown = (event) => {
-      if (event.button === 0) { // Left click
-        setIsDragging(true);
-      }
-    };
-
-    const handlePointerUp = (event) => {
-      if (event.button === 0 && hoverPosition && isDragging) { // Left click release
+    const handleClick = (event) => {
+      if (event.button === 0 && hoverPosition) { // Left click
         placeObjectAt(hoverPosition);
         setHoverPosition(null);
-        setIsDragging(false);
-      } else if (event.button === 0) {
-        setIsDragging(false);
       }
     };
 
@@ -701,7 +677,6 @@ const PlacementHelper = () => {
         event.preventDefault();
         cancelObjectPlacement();
         setHoverPosition(null);
-        setIsDragging(false);
       }
     };
 
@@ -709,24 +684,21 @@ const PlacementHelper = () => {
       if (event.key === 'Escape') {
         cancelObjectPlacement();
         setHoverPosition(null);
-        setIsDragging(false);
       }
     };
 
     window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('click', handleClick);
     window.addEventListener('contextmenu', handleRightClick);
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('click', handleClick);
       window.removeEventListener('contextmenu', handleRightClick);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [placementMode, hoverPosition, isDragging, camera, raycaster, pointer, scene, placeObjectAt, cancelObjectPlacement]);
+  }, [placementMode, hoverPosition, camera, raycaster, pointer, placeObjectAt, cancelObjectPlacement]);
 
   if (!placementMode || !hoverPosition || !pendingObject) return null;
 
@@ -740,8 +712,7 @@ const PlacementHelper = () => {
     const material = new THREE.MeshStandardMaterial({ 
       color: pendingObject.color || '#44aa88',
       transparent: true,
-      opacity: 0.7,
-      wireframe: false
+      opacity: 0.5
     });
     previewObject = new THREE.Mesh(geometryOrGroup, material);
   }
