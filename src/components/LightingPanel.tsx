@@ -44,13 +44,13 @@ const LightingPanel: React.FC = () => {
   const panelRef = useRef<HTMLDivElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
 
-  // Initialize position to center bottom
+  // Initialize position to bottom right
   useEffect(() => {
     if (panelRef.current && position.x === 0 && position.y === 0) {
       const rect = panelRef.current.getBoundingClientRect();
-      const centerX = (window.innerWidth - rect.width) / 2;
+      const rightX = window.innerWidth - rect.width - 16; // 16px from right
       const bottomY = window.innerHeight - rect.height - 16; // 16px from bottom
-      setPosition({ x: centerX, y: bottomY });
+      setPosition({ x: rightX, y: bottomY });
     }
   }, []);
 
