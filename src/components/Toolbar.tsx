@@ -69,177 +69,696 @@ const Toolbar: React.FC = () => {
     bevelSegments: 3
   });
 
-  // Helper function to create 3D text geometry
-  const create3DTextGeometry = (options: typeof textInputData) => {
-    return new Promise<THREE.ExtrudeGeometry>((resolve) => {
-      // Create a canvas to measure text and create the shape
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d')!;
+  // Simplified 3D text geometry creation using basic shapes
+  const create3DTextGeometry = (options: typeof textInputData): THREE.Group => {
+    const group = new THREE.Group();
+    const text = options.text.toUpperCase();
+    
+    // Character width and spacing
+    const charWidth = options.size * 0.6;
+    const charSpacing = options.size * 0.1;
+    const totalWidth = (text.length * charWidth) + ((text.length - 1) * charSpacing);
+    
+    // Start position (center the text)
+    let xOffset = -totalWidth / 2;
+    
+    // Create each character as a simple extruded shape
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
       
-      // Set font for measurement
-      const fontSize = 100; // Base size for high resolution
-      context.font = `${fontSize}px ${options.font}`;
-      
-      // Measure text
-      const metrics = context.measureText(options.text);
-      const textWidth = metrics.width;
-      const textHeight = fontSize;
-      
-      // Set canvas size
-      canvas.width = textWidth + 40; // Add padding
-      canvas.height = textHeight + 40;
-      
-      // Clear and set font again (canvas resize clears it)
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.font = `${fontSize}px ${options.font}`;
-      context.fillStyle = 'white';
-      context.textAlign = 'left';
-      context.textBaseline = 'top';
-      
-      // Draw text
-      context.fillText(options.text, 20, 20);
-      
-      // Get image data
-      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-      
-      // Create shape from text outline
-      const shape = new THREE.Shape();
-      const paths: THREE.Vector2[][] = [];
-      let currentPath: THREE.Vector2[] = [];
-      
-      // Simple edge detection to create outline
-      const threshold = 128;
-      const scale = options.size / fontSize; // Scale factor
-      
-      // Find contours (simplified approach)
-      const visited = new Set<string>();
-      
-      for (let y = 0; y < canvas.height; y += 2) { // Skip pixels for performance
-        for (let x = 0; x < canvas.width; x += 2) {
-          const key = `${x},${y}`;
-          if (visited.has(key)) continue;
-          
-          const alpha = imageData.data[(y * canvas.width + x) * 4 + 3];
-          
-          if (alpha > threshold) {
-            // Found a pixel, trace the edge
-            const contour = traceContour(imageData, x, y, canvas.width, canvas.height, threshold, visited);
-            if (contour.length > 10) { // Only use significant contours
-              paths.push(contour.map(point => new THREE.Vector2(
-                (point.x - canvas.width / 2) * scale,
-                -(point.y - canvas.height / 2) * scale // Flip Y axis
-              )));
-            }
-          }
-        }
+      if (char === ' ') {
+        xOffset += charWidth + charSpacing;
+        continue;
       }
       
-      // Create shape from the largest contour (main text outline)
-      if (paths.length > 0) {
-        const mainPath = paths.reduce((largest, current) => 
-          current.length > largest.length ? current : largest
-        );
+      const charGeometry = createCharacterGeometry(char, options);
+      if (charGeometry) {
+        const material = new THREE.MeshStandardMaterial({ 
+          color: '#4A90E2',
+          metalness: 0.1,
+          roughness: 0.3
+        });
         
-        if (mainPath.length > 0) {
-          shape.moveTo(mainPath[0].x, mainPath[0].y);
-          for (let i = 1; i < mainPath.length; i++) {
-            shape.lineTo(mainPath[i].x, mainPath[i].y);
-          }
-          shape.closePath();
-          
-          // Add holes for other paths (like inside of 'O', 'P', etc.)
-          paths.forEach(path => {
-            if (path !== mainPath && path.length > 5) {
-              const hole = new THREE.Path();
-              hole.moveTo(path[0].x, path[0].y);
-              for (let i = 1; i < path.length; i++) {
-                hole.lineTo(path[i].x, path[i].y);
-              }
-              hole.closePath();
-              shape.holes.push(hole);
-            }
-          });
-        }
+        const charMesh = new THREE.Mesh(charGeometry, material);
+        charMesh.position.x = xOffset + charWidth / 2;
+        group.add(charMesh);
       }
       
-      // Fallback: create simple rectangular shape if no contours found
-      if (paths.length === 0) {
-        const width = textWidth * scale;
-        const height = textHeight * scale;
-        shape.moveTo(-width/2, -height/2);
-        shape.lineTo(width/2, -height/2);
-        shape.lineTo(width/2, height/2);
-        shape.lineTo(-width/2, height/2);
-        shape.closePath();
-      }
-      
-      // Create extrude geometry
-      const extrudeSettings = {
-        depth: options.height,
-        bevelEnabled: options.bevelEnabled,
-        bevelThickness: options.bevelThickness,
-        bevelSize: options.bevelSize,
-        bevelSegments: options.bevelSegments
-      };
-      
-      const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-      geometry.center(); // Center the geometry
-      
-      resolve(geometry);
-    });
+      xOffset += charWidth + charSpacing;
+    }
+    
+    return group;
   };
 
-  // Simple contour tracing function
-  const traceContour = (
-    imageData: ImageData, 
-    startX: number, 
-    startY: number, 
-    width: number, 
-    height: number, 
-    threshold: number,
-    visited: Set<string>
-  ): { x: number; y: number }[] => {
-    const contour: { x: number; y: number }[] = [];
-    const directions = [
-      { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: -1, y: 1 },
-      { x: -1, y: 0 }, { x: -1, y: -1 }, { x: 0, y: -1 }, { x: 1, y: -1 }
-    ];
+  // Create geometry for individual characters using simple shapes
+  const createCharacterGeometry = (char: string, options: typeof textInputData): THREE.ExtrudeGeometry | null => {
+    const shape = new THREE.Shape();
+    const size = options.size;
+    const thickness = 0.1;
     
-    let x = startX;
-    let y = startY;
-    let dirIndex = 0;
-    const maxSteps = 1000; // Prevent infinite loops
-    let steps = 0;
-    
-    do {
-      contour.push({ x, y });
-      visited.add(`${x},${y}`);
-      
-      // Find next edge pixel
-      let found = false;
-      for (let i = 0; i < 8; i++) {
-        const newDirIndex = (dirIndex + i) % 8;
-        const dir = directions[newDirIndex];
-        const newX = x + dir.x;
-        const newY = y + dir.y;
+    // Define simple character shapes
+    switch (char) {
+      case 'A':
+        // Triangle with crossbar
+        shape.moveTo(-size * 0.3, 0);
+        shape.lineTo(0, size * 0.8);
+        shape.lineTo(size * 0.3, 0);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(size * 0.1, size * 0.3);
+        shape.lineTo(-size * 0.1, size * 0.3);
+        shape.lineTo(-size * 0.2, 0);
+        shape.closePath();
+        break;
         
-        if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
-          const alpha = imageData.data[(newY * width + newX) * 4 + 3];
-          if (alpha > threshold) {
-            x = newX;
-            y = newY;
-            dirIndex = newDirIndex;
-            found = true;
-            break;
-          }
-        }
-      }
-      
-      if (!found) break;
-      steps++;
-    } while ((x !== startX || y !== startY) && steps < maxSteps);
-    
-    return contour;
+      case 'B':
+        // Rectangle with curves
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.25, size * 0.6);
+        shape.quadraticCurveTo(size * 0.25, size * 0.4, size * 0.1, size * 0.4);
+        shape.lineTo(size * 0.15, size * 0.4);
+        shape.quadraticCurveTo(size * 0.3, size * 0.4, size * 0.3, size * 0.2);
+        shape.quadraticCurveTo(size * 0.3, 0, size * 0.15, 0);
+        shape.closePath();
+        break;
+        
+      case 'C':
+        // Arc shape
+        shape.moveTo(size * 0.2, 0);
+        shape.lineTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.3, 0, -size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.3, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.6);
+        shape.lineTo(-size * 0.05, size * 0.6);
+        shape.quadraticCurveTo(-size * 0.15, size * 0.6, -size * 0.15, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.15, size * 0.2, -size * 0.05, size * 0.2);
+        shape.lineTo(size * 0.1, size * 0.2);
+        shape.closePath();
+        break;
+        
+      case 'D':
+        // Rectangle with curved right side
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.3, size * 0.8, size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(size * 0.3, 0, size * 0.1, 0);
+        shape.closePath();
+        break;
+        
+      case 'E':
+        // Rectangle with horizontal lines
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.6);
+        shape.lineTo(-size * 0.05, size * 0.6);
+        shape.lineTo(-size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.15, size * 0.5);
+        shape.lineTo(size * 0.15, size * 0.3);
+        shape.lineTo(-size * 0.05, size * 0.3);
+        shape.lineTo(-size * 0.05, size * 0.2);
+        shape.lineTo(size * 0.2, size * 0.2);
+        shape.lineTo(size * 0.2, 0);
+        shape.closePath();
+        break;
+        
+      case 'F':
+        // Similar to E but no bottom line
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.6);
+        shape.lineTo(-size * 0.05, size * 0.6);
+        shape.lineTo(-size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.15, size * 0.5);
+        shape.lineTo(size * 0.15, size * 0.3);
+        shape.lineTo(-size * 0.05, size * 0.3);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'G':
+        // C with horizontal line
+        shape.moveTo(size * 0.2, 0);
+        shape.lineTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.3, 0, -size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.3, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.6);
+        shape.lineTo(size * 0.05, size * 0.6);
+        shape.lineTo(size * 0.05, size * 0.4);
+        shape.lineTo(size * 0.2, size * 0.4);
+        shape.lineTo(size * 0.2, size * 0.2);
+        shape.lineTo(-size * 0.05, size * 0.2);
+        shape.quadraticCurveTo(-size * 0.15, size * 0.2, -size * 0.15, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.15, size * 0.6, -size * 0.05, size * 0.6);
+        shape.lineTo(size * 0.1, size * 0.6);
+        shape.closePath();
+        break;
+        
+      case 'H':
+        // Two vertical lines with crossbar
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.05, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(size * 0.05, 0);
+        shape.lineTo(size * 0.05, size * 0.3);
+        shape.lineTo(-size * 0.05, size * 0.3);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'I':
+        // Simple vertical line with serifs
+        shape.moveTo(-size * 0.15, 0);
+        shape.lineTo(size * 0.15, 0);
+        shape.lineTo(size * 0.15, size * 0.15);
+        shape.lineTo(size * 0.05, size * 0.15);
+        shape.lineTo(size * 0.05, size * 0.65);
+        shape.lineTo(size * 0.15, size * 0.65);
+        shape.lineTo(size * 0.15, size * 0.8);
+        shape.lineTo(-size * 0.15, size * 0.8);
+        shape.lineTo(-size * 0.15, size * 0.65);
+        shape.lineTo(-size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.05, size * 0.15);
+        shape.lineTo(-size * 0.15, size * 0.15);
+        shape.closePath();
+        break;
+        
+      case 'J':
+        // Curved bottom
+        shape.moveTo(-size * 0.1, size * 0.3);
+        shape.quadraticCurveTo(-size * 0.1, 0, size * 0.1, 0);
+        shape.quadraticCurveTo(size * 0.3, 0, size * 0.3, size * 0.3);
+        shape.lineTo(size * 0.3, size * 0.8);
+        shape.lineTo(size * 0.15, size * 0.8);
+        shape.lineTo(size * 0.15, size * 0.3);
+        shape.quadraticCurveTo(size * 0.15, size * 0.15, size * 0.05, size * 0.15);
+        shape.quadraticCurveTo(-size * 0.05, size * 0.15, -size * 0.05, size * 0.3);
+        shape.closePath();
+        break;
+        
+      case 'K':
+        // Vertical line with diagonal lines
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.05, size * 0.45);
+        shape.lineTo(size * 0.25, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.lineTo(-size * 0.05, size * 0.35);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'L':
+        // Vertical line with bottom horizontal
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.15);
+        shape.lineTo(size * 0.2, size * 0.15);
+        shape.lineTo(size * 0.2, 0);
+        shape.closePath();
+        break;
+        
+      case 'M':
+        // Two vertical lines with connecting top
+        shape.moveTo(-size * 0.25, 0);
+        shape.lineTo(-size * 0.25, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.lineTo(0, size * 0.5);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.25, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.lineTo(size * 0.1, size * 0.5);
+        shape.lineTo(0, size * 0.3);
+        shape.lineTo(-size * 0.1, size * 0.5);
+        shape.lineTo(-size * 0.1, 0);
+        shape.closePath();
+        break;
+        
+      case 'N':
+        // Two vertical lines with diagonal
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.3);
+        shape.lineTo(size * 0.05, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(size * 0.05, 0);
+        shape.lineTo(size * 0.05, size * 0.5);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'O':
+        // Oval shape
+        shape.moveTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.3, 0, -size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.3, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.3, size * 0.8, size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(size * 0.3, 0, size * 0.1, 0);
+        shape.closePath();
+        
+        // Create hole
+        const hole = new THREE.Path();
+        hole.moveTo(-size * 0.05, size * 0.2);
+        hole.quadraticCurveTo(-size * 0.15, size * 0.2, -size * 0.15, size * 0.4);
+        hole.quadraticCurveTo(-size * 0.15, size * 0.6, -size * 0.05, size * 0.6);
+        hole.lineTo(size * 0.05, size * 0.6);
+        hole.quadraticCurveTo(size * 0.15, size * 0.6, size * 0.15, size * 0.4);
+        hole.quadraticCurveTo(size * 0.15, size * 0.2, size * 0.05, size * 0.2);
+        hole.closePath();
+        shape.holes.push(hole);
+        break;
+        
+      case 'P':
+        // Vertical line with top curve
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.3, size * 0.8, size * 0.3, size * 0.6);
+        shape.quadraticCurveTo(size * 0.3, size * 0.4, size * 0.1, size * 0.4);
+        shape.lineTo(-size * 0.05, size * 0.4);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'Q':
+        // O with tail
+        shape.moveTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.3, 0, -size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.3, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.3, size * 0.8, size * 0.3, size * 0.4);
+        shape.quadraticCurveTo(size * 0.3, size * 0.1, size * 0.2, 0);
+        shape.lineTo(size * 0.35, -size * 0.1);
+        shape.lineTo(size * 0.25, -size * 0.2);
+        shape.lineTo(size * 0.15, -size * 0.05);
+        shape.quadraticCurveTo(size * 0.1, 0, -size * 0.1, 0);
+        shape.closePath();
+        
+        // Create hole
+        const qHole = new THREE.Path();
+        qHole.moveTo(-size * 0.05, size * 0.2);
+        qHole.quadraticCurveTo(-size * 0.15, size * 0.2, -size * 0.15, size * 0.4);
+        qHole.quadraticCurveTo(-size * 0.15, size * 0.6, -size * 0.05, size * 0.6);
+        qHole.lineTo(size * 0.05, size * 0.6);
+        qHole.quadraticCurveTo(size * 0.15, size * 0.6, size * 0.15, size * 0.4);
+        qHole.quadraticCurveTo(size * 0.15, size * 0.2, size * 0.05, size * 0.2);
+        qHole.closePath();
+        shape.holes.push(qHole);
+        break;
+        
+      case 'R':
+        // P with diagonal leg
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.3, size * 0.8, size * 0.3, size * 0.6);
+        shape.quadraticCurveTo(size * 0.3, size * 0.4, size * 0.1, size * 0.4);
+        shape.lineTo(size * 0.25, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.lineTo(-size * 0.02, size * 0.25);
+        shape.lineTo(-size * 0.05, size * 0.25);
+        shape.lineTo(-size * 0.05, 0);
+        shape.closePath();
+        break;
+        
+      case 'S':
+        // Curved S shape
+        shape.moveTo(size * 0.2, 0);
+        shape.lineTo(-size * 0.05, 0);
+        shape.quadraticCurveTo(-size * 0.25, 0, -size * 0.25, size * 0.2);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.35, -size * 0.1, size * 0.4);
+        shape.lineTo(size * 0.1, size * 0.4);
+        shape.quadraticCurveTo(size * 0.25, size * 0.45, size * 0.25, size * 0.6);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.2, size * 0.6);
+        shape.lineTo(size * 0.0, size * 0.6);
+        shape.quadraticCurveTo(size * 0.1, size * 0.6, size * 0.1, size * 0.55);
+        shape.quadraticCurveTo(size * 0.1, size * 0.5, size * 0.0, size * 0.5);
+        shape.lineTo(-size * 0.1, size * 0.5);
+        shape.quadraticCurveTo(-size * 0.2, size * 0.45, -size * 0.2, size * 0.3);
+        shape.quadraticCurveTo(-size * 0.2, size * 0.15, -size * 0.05, size * 0.15);
+        shape.lineTo(size * 0.2, size * 0.15);
+        shape.closePath();
+        break;
+        
+      case 'T':
+        // Horizontal top with vertical center
+        shape.moveTo(-size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.65);
+        shape.lineTo(size * 0.075, size * 0.65);
+        shape.lineTo(size * 0.075, 0);
+        shape.lineTo(-size * 0.075, 0);
+        shape.lineTo(-size * 0.075, size * 0.65);
+        shape.lineTo(-size * 0.25, size * 0.65);
+        shape.closePath();
+        break;
+        
+      case 'U':
+        // Curved bottom
+        shape.moveTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.05, size * 0.25);
+        shape.quadraticCurveTo(-size * 0.05, size * 0.1, 0, size * 0.1);
+        shape.quadraticCurveTo(size * 0.05, size * 0.1, size * 0.05, size * 0.25);
+        shape.lineTo(size * 0.05, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.25);
+        shape.quadraticCurveTo(size * 0.2, 0, 0, 0);
+        shape.quadraticCurveTo(-size * 0.2, 0, -size * 0.2, size * 0.25);
+        shape.closePath();
+        break;
+        
+      case 'V':
+        // Two diagonal lines meeting at bottom
+        shape.moveTo(-size * 0.25, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.lineTo(0, size * 0.1);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.075, 0);
+        shape.lineTo(-size * 0.075, 0);
+        shape.closePath();
+        break;
+        
+      case 'W':
+        // Double V
+        shape.moveTo(-size * 0.3, size * 0.8);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.2);
+        shape.lineTo(0, size * 0.6);
+        shape.lineTo(size * 0.1, size * 0.2);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.3, size * 0.8);
+        shape.lineTo(size * 0.15, 0);
+        shape.lineTo(size * 0.05, 0);
+        shape.lineTo(0, size * 0.4);
+        shape.lineTo(-size * 0.05, 0);
+        shape.lineTo(-size * 0.15, 0);
+        shape.closePath();
+        break;
+        
+      case 'X':
+        // Two diagonal lines crossing
+        shape.moveTo(-size * 0.25, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.lineTo(0, size * 0.5);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.075, size * 0.45);
+        shape.lineTo(size * 0.25, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.lineTo(0, size * 0.35);
+        shape.lineTo(-size * 0.1, 0);
+        shape.lineTo(-size * 0.25, 0);
+        shape.lineTo(-size * 0.075, size * 0.45);
+        shape.closePath();
+        break;
+        
+      case 'Y':
+        // Two diagonals meeting with vertical
+        shape.moveTo(-size * 0.25, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.lineTo(0, size * 0.5);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.25, size * 0.8);
+        shape.lineTo(size * 0.075, size * 0.45);
+        shape.lineTo(size * 0.075, 0);
+        shape.lineTo(-size * 0.075, 0);
+        shape.lineTo(-size * 0.075, size * 0.45);
+        shape.closePath();
+        break;
+        
+      case 'Z':
+        // Horizontal lines with diagonal
+        shape.moveTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.65);
+        shape.lineTo(-size * 0.05, size * 0.15);
+        shape.lineTo(size * 0.2, size * 0.15);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(-size * 0.2, 0);
+        shape.lineTo(-size * 0.2, size * 0.15);
+        shape.lineTo(size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.2, size * 0.65);
+        shape.closePath();
+        break;
+        
+      case '0':
+        // Oval with diagonal line
+        shape.moveTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.25, 0, -size * 0.25, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.25, size * 0.4);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.1, 0);
+        shape.closePath();
+        
+        // Create hole
+        const zeroHole = new THREE.Path();
+        zeroHole.moveTo(-size * 0.05, size * 0.15);
+        zeroHole.quadraticCurveTo(-size * 0.12, size * 0.15, -size * 0.12, size * 0.4);
+        zeroHole.quadraticCurveTo(-size * 0.12, size * 0.65, -size * 0.05, size * 0.65);
+        zeroHole.lineTo(size * 0.05, size * 0.65);
+        zeroHole.quadraticCurveTo(size * 0.12, size * 0.65, size * 0.12, size * 0.4);
+        zeroHole.quadraticCurveTo(size * 0.12, size * 0.15, size * 0.05, size * 0.15);
+        zeroHole.closePath();
+        shape.holes.push(zeroHole);
+        break;
+        
+      case '1':
+        // Simple vertical line with top serif
+        shape.moveTo(-size * 0.1, size * 0.6);
+        shape.lineTo(0, size * 0.8);
+        shape.lineTo(size * 0.075, size * 0.8);
+        shape.lineTo(size * 0.075, 0);
+        shape.lineTo(-size * 0.075, 0);
+        shape.lineTo(-size * 0.075, size * 0.65);
+        shape.closePath();
+        break;
+        
+      case '2':
+        // Curved top with angled bottom
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(size * 0.2, size * 0.15);
+        shape.lineTo(-size * 0.05, size * 0.4);
+        shape.quadraticCurveTo(size * 0.1, size * 0.5, size * 0.1, size * 0.65);
+        shape.quadraticCurveTo(size * 0.1, size * 0.8, -size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.15, size * 0.8);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.8, -size * 0.25, size * 0.65);
+        shape.lineTo(-size * 0.1, size * 0.65);
+        shape.quadraticCurveTo(-size * 0.1, size * 0.7, -size * 0.05, size * 0.7);
+        shape.quadraticCurveTo(0, size * 0.7, 0, size * 0.65);
+        shape.quadraticCurveTo(0, size * 0.55, -size * 0.1, size * 0.45);
+        shape.lineTo(-size * 0.2, size * 0.15);
+        shape.closePath();
+        break;
+        
+      case '3':
+        // Two curves
+        shape.moveTo(-size * 0.15, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.25, size * 0.65);
+        shape.quadraticCurveTo(size * 0.25, size * 0.5, size * 0.1, size * 0.45);
+        shape.quadraticCurveTo(size * 0.25, size * 0.4, size * 0.25, size * 0.25);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.1, 0);
+        shape.lineTo(-size * 0.15, 0);
+        shape.lineTo(-size * 0.15, size * 0.15);
+        shape.lineTo(size * 0.05, size * 0.15);
+        shape.quadraticCurveTo(size * 0.1, size * 0.15, size * 0.1, size * 0.25);
+        shape.quadraticCurveTo(size * 0.1, size * 0.35, size * 0.05, size * 0.35);
+        shape.lineTo(0, size * 0.35);
+        shape.lineTo(0, size * 0.45);
+        shape.lineTo(size * 0.05, size * 0.45);
+        shape.quadraticCurveTo(size * 0.1, size * 0.45, size * 0.1, size * 0.55);
+        shape.quadraticCurveTo(size * 0.1, size * 0.65, size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.15, size * 0.65);
+        shape.closePath();
+        break;
+        
+      case '4':
+        // Vertical and horizontal lines
+        shape.moveTo(size * 0.05, 0);
+        shape.lineTo(size * 0.05, size * 0.3);
+        shape.lineTo(size * 0.2, size * 0.3);
+        shape.lineTo(size * 0.2, size * 0.45);
+        shape.lineTo(size * 0.05, size * 0.45);
+        shape.lineTo(size * 0.05, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.45);
+        shape.lineTo(-size * 0.2, size * 0.45);
+        shape.lineTo(-size * 0.2, size * 0.3);
+        shape.lineTo(-size * 0.1, size * 0.3);
+        shape.lineTo(-size * 0.1, 0);
+        shape.closePath();
+        break;
+        
+      case '5':
+        // Horizontal lines with curve
+        shape.moveTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.65);
+        shape.lineTo(-size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.05, size * 0.5);
+        shape.lineTo(size * 0.1, size * 0.5);
+        shape.quadraticCurveTo(size * 0.25, size * 0.5, size * 0.25, size * 0.25);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.1, 0);
+        shape.lineTo(-size * 0.15, 0);
+        shape.lineTo(-size * 0.15, size * 0.15);
+        shape.lineTo(size * 0.05, size * 0.15);
+        shape.quadraticCurveTo(size * 0.1, size * 0.15, size * 0.1, size * 0.25);
+        shape.quadraticCurveTo(size * 0.1, size * 0.35, size * 0.05, size * 0.35);
+        shape.lineTo(-size * 0.2, size * 0.35);
+        shape.closePath();
+        break;
+        
+      case '6':
+        // Circle with top opening
+        shape.moveTo(size * 0.1, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.8, -size * 0.25, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.25, 0, -size * 0.1, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.25, size * 0.2);
+        shape.quadraticCurveTo(size * 0.25, size * 0.4, size * 0.1, size * 0.4);
+        shape.lineTo(-size * 0.1, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.1, size * 0.65, size * 0.05, size * 0.65);
+        shape.closePath();
+        
+        // Create hole for bottom circle
+        const sixHole = new THREE.Path();
+        sixHole.moveTo(-size * 0.05, size * 0.15);
+        sixHole.quadraticCurveTo(-size * 0.1, size * 0.15, -size * 0.1, size * 0.2);
+        sixHole.quadraticCurveTo(-size * 0.1, size * 0.25, -size * 0.05, size * 0.25);
+        sixHole.lineTo(size * 0.05, size * 0.25);
+        sixHole.quadraticCurveTo(size * 0.1, size * 0.25, size * 0.1, size * 0.2);
+        sixHole.quadraticCurveTo(size * 0.1, size * 0.15, size * 0.05, size * 0.15);
+        sixHole.closePath();
+        shape.holes.push(sixHole);
+        break;
+        
+      case '7':
+        // Horizontal top with diagonal
+        shape.moveTo(-size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(size * 0.2, size * 0.65);
+        shape.lineTo(size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.1, 0);
+        shape.lineTo(-size * 0.25, 0);
+        shape.lineTo(-size * 0.05, size * 0.65);
+        shape.lineTo(-size * 0.2, size * 0.65);
+        shape.closePath();
+        break;
+        
+      case '8':
+        // Two circles stacked
+        shape.moveTo(-size * 0.1, 0);
+        shape.quadraticCurveTo(-size * 0.25, 0, -size * 0.25, size * 0.2);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.35, -size * 0.15, size * 0.4);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.45, -size * 0.25, size * 0.6);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.8, -size * 0.1, size * 0.8);
+        shape.lineTo(size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.25, size * 0.6);
+        shape.quadraticCurveTo(size * 0.25, size * 0.45, size * 0.15, size * 0.4);
+        shape.quadraticCurveTo(size * 0.25, size * 0.35, size * 0.25, size * 0.2);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.1, 0);
+        shape.closePath();
+        
+        // Top hole
+        const eightTopHole = new THREE.Path();
+        eightTopHole.moveTo(-size * 0.05, size * 0.5);
+        eightTopHole.quadraticCurveTo(-size * 0.1, size * 0.5, -size * 0.1, size * 0.6);
+        eightTopHole.quadraticCurveTo(-size * 0.1, size * 0.7, -size * 0.05, size * 0.7);
+        eightTopHole.lineTo(size * 0.05, size * 0.7);
+        eightTopHole.quadraticCurveTo(size * 0.1, size * 0.7, size * 0.1, size * 0.6);
+        eightTopHole.quadraticCurveTo(size * 0.1, size * 0.5, size * 0.05, size * 0.5);
+        eightTopHole.closePath();
+        shape.holes.push(eightTopHole);
+        
+        // Bottom hole
+        const eightBottomHole = new THREE.Path();
+        eightBottomHole.moveTo(-size * 0.05, size * 0.1);
+        eightBottomHole.quadraticCurveTo(-size * 0.1, size * 0.1, -size * 0.1, size * 0.2);
+        eightBottomHole.quadraticCurveTo(-size * 0.1, size * 0.3, -size * 0.05, size * 0.3);
+        eightBottomHole.lineTo(size * 0.05, size * 0.3);
+        eightBottomHole.quadraticCurveTo(size * 0.1, size * 0.3, size * 0.1, size * 0.2);
+        eightBottomHole.quadraticCurveTo(size * 0.1, size * 0.1, size * 0.05, size * 0.1);
+        eightBottomHole.closePath();
+        shape.holes.push(eightBottomHole);
+        break;
+        
+      case '9':
+        // 6 upside down
+        shape.moveTo(-size * 0.1, 0);
+        shape.lineTo(size * 0.1, 0);
+        shape.quadraticCurveTo(size * 0.25, 0, size * 0.25, size * 0.4);
+        shape.quadraticCurveTo(size * 0.25, size * 0.8, size * 0.1, size * 0.8);
+        shape.lineTo(-size * 0.1, size * 0.8);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.8, -size * 0.25, size * 0.6);
+        shape.quadraticCurveTo(-size * 0.25, size * 0.4, -size * 0.1, size * 0.4);
+        shape.lineTo(size * 0.1, size * 0.4);
+        shape.quadraticCurveTo(size * 0.1, size * 0.15, -size * 0.05, size * 0.15);
+        shape.closePath();
+        
+        // Create hole for top circle
+        const nineHole = new THREE.Path();
+        nineHole.moveTo(size * 0.05, size * 0.55);
+        nineHole.quadraticCurveTo(size * 0.1, size * 0.55, size * 0.1, size * 0.6);
+        nineHole.quadraticCurveTo(size * 0.1, size * 0.65, size * 0.05, size * 0.65);
+        nineHole.lineTo(-size * 0.05, size * 0.65);
+        nineHole.quadraticCurveTo(-size * 0.1, size * 0.65, -size * 0.1, size * 0.6);
+        nineHole.quadraticCurveTo(-size * 0.1, size * 0.55, -size * 0.05, size * 0.55);
+        nineHole.closePath();
+        shape.holes.push(nineHole);
+        break;
+        
+      default:
+        // Default rectangle for unsupported characters
+        shape.moveTo(-size * 0.2, 0);
+        shape.lineTo(size * 0.2, 0);
+        shape.lineTo(size * 0.2, size * 0.8);
+        shape.lineTo(-size * 0.2, size * 0.8);
+        shape.closePath();
+        break;
+    }
+
+    // Create extrude geometry
+    const extrudeSettings = {
+      depth: options.height,
+      bevelEnabled: options.bevelEnabled,
+      bevelThickness: options.bevelThickness,
+      bevelSize: options.bevelSize,
+      bevelSegments: options.bevelSegments
+    };
+
+    try {
+      return new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    } catch (error) {
+      console.warn(`Failed to create geometry for character '${char}':`, error);
+      // Return a simple box as fallback
+      return new THREE.BoxGeometry(size * 0.4, size * 0.8, options.height);
+    }
   };
 
   // Helper function to create tree geometry
@@ -645,15 +1164,21 @@ const Toolbar: React.FC = () => {
     startObjectPlacement(objectDef);
   };
 
-  const handleCreateText = async () => {
+  const handleCreateText = () => {
     try {
-      // Create the 3D text geometry
-      const geometry = await create3DTextGeometry(textInputData);
+      // Validate input
+      if (!textInputData.text.trim()) {
+        console.warn('Text input is empty');
+        return;
+      }
+
+      // Create the 3D text geometry using the simplified approach
+      const textGroup = create3DTextGeometry(textInputData);
       
       // Create the text object definition
       const textObjectDef = {
         name: `Text: ${textInputData.text}`,
-        geometry: () => geometry,
+        geometry: () => textGroup,
         color: '#4A90E2'
       };
 
@@ -662,6 +1187,7 @@ const Toolbar: React.FC = () => {
       setShowTextInput(false);
     } catch (error) {
       console.error('Error creating 3D text:', error);
+      
       // Fallback to simple box if text creation fails
       const fallbackDef = {
         name: `Text: ${textInputData.text}`,
